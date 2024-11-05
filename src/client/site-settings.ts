@@ -5,7 +5,7 @@ import { DataSourceEditor, createDataSource } from '@silexlabs/grapesjs-data-sou
 
 export default function(config: ClientConfig, opts: EleventyPluginOptions): void {
   config.on('silex:startup:end', () => {
-    const editor = config.getEditor() as DataSourceEditor
+    const editor = config.getEditor() as unknown as DataSourceEditor
     config.addSettings({
       id: 'cms',
       label: 'CMS',

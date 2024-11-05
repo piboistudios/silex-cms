@@ -11,12 +11,12 @@ import { Page } from 'grapesjs'
 export default function(config: ClientConfig, opts: EleventyPluginOptions): void {
   if(!opts.enable11ty) return // Do not add the settings if 11ty is disabled
   config.on('silex:startup:end', () => {
-    const editor = config.getEditor() as DataSourceEditor
+    const editor = config.getEditor() as unknown as DataSourceEditor
     editor.on(/* ClientEvent.SETT(INGS_SAVE_START */'silex:settings:save:start', (page: Page) => updateBodyStates(editor, page))
     config.addSettings({
       id: 'cms',
       label: 'CMS',
-      render: (settings: Silex11tyPluginWebsiteSettings, page: Page) => render(settings, config, page),
+      render: (settings: Silex11tyPluginWebsiteSettings, page: Page) => render(settings, config, page) as any,
     }, 'page')
   })
 }

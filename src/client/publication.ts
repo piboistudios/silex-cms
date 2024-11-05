@@ -1,14 +1,20 @@
 import dedent from 'dedent'
+import STORE_JS from './store.source.js';
 import { Component, Page } from 'grapesjs'
-import { BinariOperator, DataSourceEditor, DataTree, Filter, IDataSourceModel, NOTIFICATION_GROUP, Properties, Property, State, StateId, StoredState, Token, UnariOperator, fromStored, getPersistantId, getState, getStateIds, getStateVariableName, toExpression } from '@silexlabs/grapesjs-data-source'
+import getFilters from '@silexlabs/grapesjs-data-source/src/filters/liquid'
+import { minify_sync } from 'terser'
+import { BinariOperator, DataSourceEditor, DataTree, Expression, Filter, IDataSourceModel, NOTIFICATION_GROUP, Options, Properties, Property, PropertyOptions, State, StateId, StoredState, StoredStateWithId, Token, UnariOperator, fromStored, getPersistantId, getState, getStateIds, getStateVariableName, toExpression } from '@silexlabs/grapesjs-data-source'
+import * as ESTree from 'estree';
+import * as AST from 'astring';
 import { assignBlock, echoBlock, echoBlock1line, getPaginationData, ifBlock, loopBlock } from './liquid'
 import { EleventyPluginOptions, Silex11tyPluginWebsiteSettings } from '../client'
 import { PublicationTransformer } from '@silexlabs/silex/src/ts/client/publication-transformers'
 import { ClientConfig } from '@silexlabs/silex/src/ts/client/config'
 import { UNWRAP_ID } from './traits'
 import { EleventyDataSourceId } from './DataSource'
+import { ACTIONS_JS } from './actions';
 //import { ClientSideFile, ClientSideFileType, ClientSideFileWithContent, PublicationData } from '@silexlabs/silex/src/ts/types'
-
+const minify = minify_sync;
 // FIXME: should be imported from silex
 type ClientSideFile = {
   path: string,
@@ -46,7 +52,7 @@ interface RealState {
 }
 
 function getFetchPluginOptions(options: EleventyPluginOptions, settings: Silex11tyPluginWebsiteSettings): object | false {
-  if(settings.eleventyFetch) {
+  if (settings.eleventyFetch) {
     return options.fetchPlugin || {}
   }
   return options.fetchPlugin ?? false
@@ -54,12 +60,12 @@ function getFetchPluginOptions(options: EleventyPluginOptions, settings: Silex11
 
 export default function (config: ClientConfig, options: EleventyPluginOptions) {
   config.on('silex:startup:end', () => {
-    const editor = config.getEditor() as DataSourceEditor
+    const editor = config.getEditor() as unknown as DataSourceEditor
     // Generate the liquid when the site is published
     config.addPublicationTransformers({
       // Render the components when they are published
       // Will run even with enable11ty = false in order to enable HTML attributes
-      renderComponent: (component, toHtml) => withNotification(() => renderComponent(config, component, toHtml), editor, component.getId()),
+      renderComponent: (component, toHtml) => withNotification(() => renderComponent(config, component as any, toHtml), editor, component.getId()),
       // Transform the paths to be published according to options.urls
       transformPermalink: options.enable11ty ? (path, type) => withNotification(() => transformPermalink(editor, path, type, options), editor, null) : undefined,
       // Transform the paths to be published according to options.dir
@@ -95,8 +101,8 @@ function enable11ty(editor: DataSourceEditor): boolean {
  */
 function makeAttribute(key, value): string {
   switch (typeof value) {
-  case 'boolean': return value ? key : ''
-  default: return `${key}="${value}"`
+    case 'boolean': return value ? key : ''
+    default: return `${key}="${value}"`
   }
 }
 
@@ -135,9 +141,9 @@ export function getPermalink(page: Page, permalink: Token[], isCollectionPage: b
     const body = page.getMainComponent() as Component
     return echoBlock1line(body, permalink.map(token => {
       // Replace states which will be one from ./states.ts
-      if(token.type === 'state') {
+      if (token.type === 'state') {
         const state = getState(body, token.storedStateId, true)
-        if(!state) throw new Error('State not found on body')
+        if (!state) throw new Error('State not found on body')
         return {
           ...state.expression[0],
           dataSourceId: undefined,
@@ -162,11 +168,11 @@ export function getPermalink(page: Page, permalink: Token[], isCollectionPage: b
  * Get the front matter for a given page
  */
 export function getFrontMatter(page: Page, settings: Silex11tyPluginWebsiteSettings, slug: string, collection, lang = ''): string {
-  const data = (function() {
-    if(!settings.eleventyPageData) return undefined
+  const data = (function () {
+    if (!settings.eleventyPageData) return undefined
     const expression = toExpression(settings.eleventyPageData)
-    if(expression) {
-      if(expression.filter(token => token.type !== 'property').length > 0) {
+    if (expression) {
+      if (expression.filter(token => token.type !== 'property').length > 0) {
         console.warn('Expression for pagination data has to contain only properties', expression.map(token => token.type))
       }
       return getPaginationData(expression as Property[])
@@ -234,7 +240,7 @@ export function getBodyStates(page: Page): string {
 
 export function transformPage(editor: DataSourceEditor, data: { page, siteSettings, pageSettings }): void {
   // Do nothing if there is no data source, just a static site
-  if(!enable11ty(editor)) return
+  if (!enable11ty(editor)) return
 
   const { pageSettings, page } = data
   const body = page.getMainComponent()
@@ -271,7 +277,7 @@ export function transformPage(editor: DataSourceEditor, data: { page, siteSettin
  */
 export function transformFiles(editor: DataSourceEditor, options: EleventyPluginOptions, data: PublicationData): void {
   // Do nothing if there is no data source, just a static site
-  if(!enable11ty(editor)) return
+  if (!enable11ty(editor)) return
 
   // Type safe data source manager
   const dsm = editor.DataSourceManager
@@ -422,7 +428,7 @@ export function queryToDataFile(dataSource: IDataSourceModel, queryStr: string, 
   return fetchPlugin ? makeFetchCallEleventy(fetchOptions, fetchPlugin) : makeFetchCall(fetchOptions)
 }
 
-export function makeFetchCall(options: {key: string, url: string, method: string, headers: string, query: string}): string {
+export function makeFetchCall(options: { key: string, url: string, method: string, headers: string, query: string }): string {
   return dedent`
   try {
     const response = await fetch(\`${options.url}\`, {
@@ -452,7 +458,7 @@ export function makeFetchCall(options: {key: string, url: string, method: string
 `
 }
 
-export function makeFetchCallEleventy(options: {key: string, url: string, method: string, headers: string, query: string}, fetchPlugin: object): string {
+export function makeFetchCallEleventy(options: { key: string, url: string, method: string, headers: string, query: string }, fetchPlugin: object): string {
   return dedent`
   try {
     const json = await EleventyFetch(\`${options.url}\`, {
@@ -571,11 +577,15 @@ function withNotification<T>(cbk: () => T, editor: DataSourceEditor, componentId
  * Render the components when they are published
  */
 function renderComponent(config: ClientConfig, component: Component, toHtml: () => string): string | undefined {
-  if(cache.has(component.getId())) {
+  if (cache.has(component.getId())) {
     return cache.get(component.getId())
   }
-
-  const editor = config.getEditor() as DataSourceEditor
+  const attributes = component.getAttributes();
+  if (attributes["id"] === 'pagedata' && attributes.type === 'application/json') {
+    return '<script type="application/json" id="pagedata">{ pagedata | json}</script>'
+  }
+  let script = String(component.defaults?.script) || ''
+  const editor = config.getEditor() as unknown as DataSourceEditor
 
   const dataTree = editor.DataSourceManager.getDataTree()
 
@@ -590,10 +600,35 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
       stateId,
       state: getState(component, stateId, true)!,
     }))), editor, component.getId())
-
+  const reactive = componentIsReactive(component);
+  console.log("Component:", component, "is reactive?", reactive);
   const unwrap = component.get(UNWRAP_ID)
+  if (component.get('type') === 'wrapper') {
 
-  if (statesPrivate.length > 0 || statesPublic.length > 0 || unwrap) {
+
+    component.unset('script');
+    script = getBoilerplateScript(component, config);
+    component.set('script', script);
+    const existingScript = editor.Components.getById('pagedata');
+    if (!existingScript) {
+
+
+      const [pagedata] = editor.addComponents({
+        type: "text",
+        tagName: "script",
+        attributes: {
+          type: "application/json",
+          id: "pagedata"
+        },
+        content: "{% pagedata | json %}"
+      });
+      pagedata.move(component, { at: 0 });
+      // component.save();
+      pagedata.setId("pagedata");
+    }
+
+  }
+  if (statesPrivate.length > 0 || statesPublic.length > 0 || unwrap || reactive) {
     const tagName = component.get('tagName')?.toLowerCase()
     if (tagName) {
       // Convenience key value object
@@ -619,27 +654,31 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
       const innerHtml = hasInnerHtml ? echoBlock(component, statesObj.innerHTML.tokens) : component.getInnerHTML()
       const operator = component.get('conditionOperator') ?? UnariOperator.TRUTHY
       const binary = operator && Object.values(BinariOperator).includes(operator)
-      const [ifStart, ifEnd] = hasCondition ? ifBlock(component, binary ? {
+      const win: any = window;
+      win._debug = {
+        statesObj,
+        component,
+
+      }
+      const condition = hasCondition ? (binary ? {
         expression: statesObj.condition.tokens,
         expression2: statesObj.condition2?.tokens ?? [],
         operator,
       } : {
         expression: statesObj.condition.tokens,
         operator,
-      }) : []
+      }) : undefined;
+      let [ifStart, ifEnd] = hasCondition ? ifBlock(component, condition!) : []
+      let originalAttributes = component.get('attributes') as Record<string, string>
+      originalAttributes.class = component.getClasses().join(' ')
+
       const [forStart, forEnd] = hasData ? loopBlock(dataTree, component, statesObj.__data.tokens) : []
       const states = statesPublic
         .map(({ stateId, tokens }) => assignBlock(stateId, component, tokens))
         .join('\n')
-      const before = (states ?? '') + (forStart ?? '') + (ifStart ?? '')
-      const after = (ifEnd ?? '') + (forEnd ?? '')
-
-      // Attributes
-      const originalAttributes = component.get('attributes') as Record<string, string>
-      // Add css classes
-      originalAttributes.class = component.getClasses().join(' ')
-      // Make the list of attributes
-      const attributes = buildAttributes(originalAttributes, statesPrivate
+      let before = (states ?? '') + (forStart ?? '') + (ifStart ?? '')
+      let after = (ifEnd ?? '') + (forEnd ?? '')
+      const attributeStates = statesPrivate
         // Filter out properties, keep only attributes
         .filter(({ label }) => isAttribute(label))
         // Make tokens a string
@@ -647,8 +686,81 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
           stateId,
           label,
           value: echoBlock(component, tokens),
-        }))
-      )
+        }));
+      if (reactive) {
+        const parent = component.parent();
+        if (parent && !parent.getAttributes?.()?.['x-data']) {
+          parent.setAttributes({
+            'x-data': true
+          })
+        }
+
+        component.unset('script');
+        script += '\n' + getAlpineDataScript(component)
+        component.set('script', script);
+        // component.save({
+        //   script: script
+        // })
+        if (hasCondition) {
+          ifStart = '';
+          ifEnd = '';
+          const clone = alpinify(component.clone(), { statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes, attributeStates });
+          const template = editor.addComponents({
+            tagName: 'template',
+            attributes: {
+              'x-if': genJs(toJsCondition(component, condition!), { minify: true })
+            },
+            content: clone.toHTML(),
+
+          })[0];
+          clone.remove();
+          const html = template.toHTML();
+          template.remove();
+          cache.set(component.getId(), html);
+          return html;
+        }
+        if (forStart && forEnd) {
+          const persistentId = getPersistantId(component);
+          if (!persistentId) {
+            console.error('Component', component, 'has no persistant ID. Persistant ID is required to get component states.')
+            throw new Error('This component has no persistant ID')
+          }
+          const stateVarName: string = toJsVarName(getStateVariableName(persistentId, '__data'))
+          const clone: Component = alpinify(component.clone(), { statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes, attributeStates });
+          const attributes = clone.getAttributes();
+          delete attributes['x-rm'];
+          clone.setAttributes(attributes);
+
+          clone.unset('script');
+          const template = editor.addComponents({
+            tagName: 'template',
+            attributes: {
+              "x-for": `${stateVarName} in ${maybeAwaitJs(genJs(ensureFilteredData(toJsExpression(statesObj.__data.tokens), statesObj.__data.tokens), { minify: true }))}`
+            },
+            content: clone.toHTML()
+          })[0];
+          clone.remove();
+
+          before = template.toHTML() + '\n' + before;
+          template.remove();
+          component.addAttributes({
+            'x-data': true,
+            'x-rm': true
+          });
+        } else {
+          alpinify(component, { statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes, attributeStates })
+        }
+        console.log("script for", tagName, ":", component.get('script'))
+        console.log("component" + tagName + ":", component)
+      }
+
+      // Attributes
+      // Add css classes
+      // Make the list of attributes
+      originalAttributes = component.get('attributes') as Record<string, string>
+      originalAttributes.class = component.getClasses().join(' ')
+      const attributes = buildAttributes(originalAttributes, attributeStates)
+
       if (unwrap) {
         const html = `${before}${innerHtml}${after}`
         cache.set(component.getId(), html)
@@ -679,62 +791,1050 @@ function toPath(path: (string | undefined)[]) {
 
 function transformPermalink(editor: DataSourceEditor, path: string, type: string, options: EleventyPluginOptions): string {
   // Do nothing if there is no data source, just a static site
-  if(!enable11ty(editor)) return path
+  if (!enable11ty(editor)) return path
 
   switch (type) {
-  case 'html':
-    return toPath([
-      path
-    ])
-  case 'asset':
-    return toPath([
-      options.urls?.assets,
-      path.replace(/^\/?assets\//, ''),
-    ])
-  case 'css': {
-    return toPath([
-      options.urls?.css,
-      path.replace(/^\.?\/?css\//, ''),
-    ])
-  }
-  default:
-    console.warn('Unknown file type in transform permalink:', type)
-    return path
+    case 'html':
+      return toPath([
+        path
+      ])
+    case 'asset':
+      return toPath([
+        options.urls?.assets,
+        path.replace(/^\/?assets\//, ''),
+      ])
+    case 'css': {
+      return toPath([
+        options.urls?.css,
+        path.replace(/^\.?\/?css\//, ''),
+      ])
+    }
+    default:
+      console.warn('Unknown file type in transform permalink:', type)
+      return path
   }
 }
 
 function transformPath(editor: DataSourceEditor, path: string, type: string, options: EleventyPluginOptions): string {
   // Do nothing if there is no data source, just a static site
-  if(!enable11ty(editor)) return path
+  if (!enable11ty(editor)) return path
 
   switch (type) {
-  case 'html':
-    return toPath([
-      options.dir?.input,
-      options.dir?.silex,
-      options.dir?.html,
-      path,
-    ])
-  case 'css':
-    return toPath([
-      options.dir?.input,
-      options.dir?.silex,
-      options.dir?.css,
-      path.replace(/^\/?css\//, ''),
-    ])
-  case 'asset':
-    return toPath([
-      options.dir?.input,
-      options.dir?.silex,
-      options.dir?.assets,
-      path.replace(/^\/?assets\//, ''),
-    ])
-  default:
-    console.warn('Unknown file type in transform path:', type)
-    return path
+    case 'html':
+      return toPath([
+        options.dir?.input,
+        options.dir?.silex,
+        options.dir?.html,
+        path,
+      ])
+    case 'css':
+      return toPath([
+        options.dir?.input,
+        options.dir?.silex,
+        options.dir?.css,
+        path.replace(/^\/?css\//, ''),
+      ])
+    case 'asset':
+      return toPath([
+        options.dir?.input,
+        options.dir?.silex,
+        options.dir?.assets,
+        path.replace(/^\/?assets\//, ''),
+      ])
+    default:
+      console.warn('Unknown file type in transform path:', type)
+      return path
   }
 }
 
+
+const MUTATORS = ['set_state', 'coalesce_w_state']
+function componentIsReactive(component: Component) {
+  const parent = component.parent();
+  const parentReactive = parent && componentIsReactive(parent);
+  if (parentReactive && component.get('tagName')) return true;
+  const events = component.get('events');
+  if (events && events.length) return true;
+  const states = ((component.get('publicStates') || []) as StoredStateWithId[]).map(s => s.id)
+  let reactive = false;
+  console.log("Component:", component);
+  const checkReactive = (child: Component) => {
+    if (reactive) return;
+    const events: any[] = child.get('events');
+    console.log("events:", events);
+    console.log("child:", child);
+    if (events && events.length) {
+      for (const event of events) {
+        if (!event.expression) continue;
+        const expr: Token[] = JSON.parse(event.expression);
+        console.log("looking at event", event, "and expr:", expr);
+        for (const token of expr) {
+          if (token.type === 'property') {
+            console.log("looking property", token, "in", MUTATORS);
+            if (
+              MUTATORS.includes(token.fieldId) &&
+              token?.options?.key && states.includes(token.options.key as any)
+            ) {
+              reactive = true;
+              return;
+            }
+          }
+        }
+      }
+    }
+    child.forEachChild(checkReactive);
+  };
+  component.forEachChild(checkReactive);
+  return reactive;
+}
+
+function getValue(value: any) {
+  while (typeof value === 'string') {
+    value = JSON.parse(value);
+  }
+  return value;
+}
+
+function getAlpineDataScript(component: Component): string {
+  const publicStates: StoredStateWithId[] = (component.get('publicStates') || []);
+  if (!publicStates.length) return '';
+  const dataObj: ESTree.ObjectExpression = {
+    type: "ObjectExpression",
+    properties: (publicStates).map((s): ESTree.Property => {
+      return {
+        type: "Property",
+        key: toLiteral(s.id),
+        value: ensureFilteredData(toJsExpression(s.expression, withThis({ component })), s.expression as any),
+        method: false,
+        shorthand: false,
+        kind: "init",
+        computed: false
+      }
+    })
+  }
+  const callExpr: ESTree.CallExpression = {
+    type: "CallExpression",
+    callee: {
+      type: "MemberExpression",
+      object: {
+        type: "Identifier",
+        name: "Alpine"
+      },
+      property: {
+        type: "Identifier",
+        name: "data"
+      },
+      computed: false,
+      optional: false
+    },
+    arguments: [
+      {
+        type: "Literal",
+        value: sanitizeId(component.getId())
+      },
+      {
+        type: "FunctionExpression",
+        params: [],
+        body: {
+          type: "BlockStatement",
+          body: [
+            {
+              type: "ReturnStatement",
+              argument: dataObj
+            }
+          ]
+        }
+      }
+    ],
+    optional: false
+  }
+  return onAlpineInit(genJs(callExpr));
+}
+function genJs(ast: ESTree.Expression, opts?: { minify: boolean }) {
+  console.log("input Js AST:", ast);
+  opts ??= {
+    minify: false
+  };
+  let js = AST.generate(ast);
+  if (opts.minify) {
+    js = js.replace(/[\n\r]/gi, '');
+  }
+  js = js.replace(/"/gi, "'");
+  if (js.slice(-1) === ';') js = js.slice(0, -1);
+  console.log("output js:", js);
+  return js;
+}
+function toLiteral(id: string): ESTree.Property["key"] {
+  return {
+    type: "Literal",
+    value: id
+  }
+}
+const CHAIN_FILTERS = (
+  root: ((v: ESTree.Expression) => ESTree.Expression) | undefined, opts: ToJsExpressionOpts | undefined
+): (
+  (v: Token, c?: ESTree.Expression) => [ESTree.Expression, boolean]
+) | undefined => (expr, currentJs): [ESTree.Expression, boolean] => {
+  root ??= v => v;
+  if (expr.type === 'filter') {
+    return [{
+      type: "CallExpression",
+      callee: {
+        type: "MemberExpression",
+        object: ensureJs(currentJs),
+        property: {
+          type: "Identifier",
+          name: "withFilter",
+        },
+        optional: true,
+        computed: false,
+      },
+      arguments: [
+        root!({
+          type: "MemberExpression",
+          object: {
+            type: "Identifier",
+            name: "$store",
+          },
+          property: {
+            type: "MemberExpression",
+            object: {
+              type: "Identifier",
+              name: "filters"
+            },
+            property: {
+              type: "Literal",
+              value: expr.id
+            },
+            computed: true,
+            optional: true
+          },
+          optional: false,
+          computed: false
+        })!,
+        FILTERS[expr.id] ?
+          FILTERS[expr.id].getArguments(expr as Token, opts) :
+          pojsoToAST(reifyProperties(expr.options))
+      ],
+      optional: true,
+    }, true]
+  }
+  return [currentJs!, false]
+}
+
+const STATE_SETTER = {
+  getArguments(_expr: Token, opts?: ToJsExpressionOpts): ESTree.Expression {
+    const expr: Property = _expr as any;
+    if (!expr.options) throw new Error("Options required for set_state action")
+    const options: any = expr.options;
+    const { key, value } = options;
+    const valueExpr: Expression = JSON.parse(value);
+    console.log("Value expr:", valueExpr);
+    const root = opts?.transformers?.root || (v => v);
+
+    return {
+      type: "ObjectExpression",
+      properties: [
+        {
+          type: "Property",
+          key: {
+            type: "Literal",
+            value: "$data",
+          },
+          value: {
+            type: "Identifier",
+            name: "$data"
+          },
+          kind: "init",
+          shorthand: true,
+          computed: false,
+          method: false
+        },
+        {
+          type: "Property",
+          key: {
+            type: "Literal",
+            value: "key"
+          },
+          value: {
+            type: "Literal",
+            value: key
+          },
+          kind: "init",
+          shorthand: false,
+          computed: false,
+          method: false,
+        },
+        {
+          type: "Property",
+          key: {
+            type: "Literal",
+            value: "value"
+          },
+          value: toJsExpression(valueExpr, {
+            ...opts,
+            transformers: {
+              ...opts?.transformers,
+              chain: v => v,
+              middleware: CHAIN_FILTERS(root, opts)
+            }
+          }),
+          kind: "init",
+          shorthand: false,
+          computed: false,
+          method: false,
+        }
+      ]
+    }
+
+
+  }
+}
+const ACTIONS: Record<string, typeof STATE_SETTER> = {
+  "set_state": STATE_SETTER,
+  "coalesce_w_state": STATE_SETTER
+}
+const FILTERS: typeof ACTIONS = {
+
+}
+type ToJsExpressionOpts = {
+  component?: Component
+  transformers?: {
+    root?: (v: ESTree.Expression) => ESTree.Expression
+    chain?: (v: ESTree.Expression) => ESTree.Expression,
+    middleware?: (v: Token, c?: ESTree.Expression) => [ESTree.Expression, boolean]
+  }
+};
+const VALUEOF_CHAINER: (v: ESTree.Expression) => ESTree.Expression = v => v;
+// currentJs => currentJs.type === 'Literal' ?
+//   currentJs :
+//   ({
+//     type: "CallExpression",
+//     callee: {
+//       type: "MemberExpression",
+//       object: currentJs!,
+//       property: {
+//         type: "Identifier",
+//         name: "valueOf"
+//       },
+//       optional: true,
+//       computed: false,
+//     },
+//     arguments: [],
+//     optional: true
+//   })
+const ensureJs = v => v || { type: "Identifier", name: "undefined" }
+
+function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): ESTree.Expression {
+  if (!expression || !expression.length) return { type: "Identifier", name: "null" }
+  console.log("Input expression:", expression);
+  const first = expression[0];
+  let lastChained;
+  let { root, chain: _chain, middleware } = opts?.transformers! || {};
+  root ??= v => v;
+  _chain ??= VALUEOF_CHAINER;
+  middleware ??= CHAIN_FILTERS(root, opts);
+  if (first.type === 'property' && first.dataSourceId === 'actions') {
+    return {
+      type: "CallExpression",
+      optional: false,
+      callee: {
+        type: "MemberExpression",
+        object: {
+          type: "MemberExpression",
+          object: {
+            type: "Identifier",
+            name: "$store"
+          },
+          property: {
+            type: "Identifier",
+            name: "actions"
+          },
+          optional: false,
+          computed: false,
+        },
+        property: {
+          type: "Identifier",
+          name: "run_all",
+        },
+        optional: false,
+        computed: false
+      },
+      arguments: (expression as Property[])
+        .filter(e => Boolean(e.dataSourceId))
+        .map((e): ESTree.CallExpression => ({
+          type: "CallExpression",
+          callee: {
+            type: "MemberExpression",
+            object: root({
+              type: "Identifier",
+              name: (e as any).dataSourceId
+            }),
+            property: {
+              type: "Literal",
+              value: e.fieldId
+            },
+            computed: true,
+            optional: true
+          },
+          arguments: [
+            ACTIONS[e.fieldId].getArguments(e, opts)
+          ],
+          optional: true
+        }))
+        .map((e): ESTree.ArrowFunctionExpression => ({
+          type: "ArrowFunctionExpression",
+          expression: true,
+          body: e,
+          params: []
+        }))
+    }
+  }
+  let currentJs: ESTree.Expression | undefined;
+  for (let i = 0; i < expression.length; i++) {
+    const expr = expression[i];
+    if (middleware) {
+      const [ast, halt] = middleware(expr as Token, currentJs);
+      if (ast) currentJs = ast;
+      if (halt) continue;
+    }
+    switch (expr.type) {
+      case 'property': {
+        if (expr.dataSourceId) {
+
+          if (!currentJs) {
+            currentJs = {
+              type: "MemberExpression",
+              object: root({
+                type: "Identifier",
+                name: "$store"
+              }),
+              property: {
+                type: "Literal",
+                value: expr.dataSourceId
+              },
+              optional: true,
+              computed: true,
+            }
+
+          }
+          currentJs = {
+            type: "MemberExpression",
+            object: currentJs,
+            property: {
+              type: "Literal",
+              value: expr.fieldId
+            },
+            computed: true,
+            optional: true,
+          }
+          chain();
+
+          if (expr.options && Object.keys(expr.options).length) {
+            currentJs = {
+              type: "CallExpression",
+              callee: currentJs,
+              arguments: [pojsoToAST(reifyProperties(expr.options))],
+              optional: true,
+            }
+          }
+        } else {
+          if (expr.fieldId === 'fixed') {
+            if (!expr.options) throw new Error("Fixed value must have... well, a value");
+            currentJs = {
+              type: "Literal",
+              value: expr.options.value as any
+            }
+          }
+          else throw new Error("Non OpenAPI property access not allowed");
+        }
+        break;
+      }
+      case "state": {
+        const stateId = (expr.componentId && expr.storedStateId === '__data') ?
+          toJsVarName(getStateVariableName(expr.componentId || "", "__data")) :
+          expr.storedStateId
+        currentJs = {
+          type: "MemberExpression",
+          object: root({
+            type: "Identifier",
+            name: "$data"
+          }),
+          property: {
+            type: "Literal",
+            value: stateId
+          },
+          computed: true,
+          optional: true
+        }
+        break;
+      }
+      case "filter": {
+        currentJs = {
+          type: "CallExpression",
+          callee: root({
+            type: "MemberExpression",
+            object: {
+              type: "Identifier",
+              name: "$store",
+            },
+            property: {
+              type: "MemberExpression",
+              object: {
+                type: "Identifier",
+                name: "filters"
+              },
+              property: {
+                type: "Literal",
+                value: expr.id
+              },
+              computed: true,
+              optional: true
+            },
+            optional: false,
+            computed: false
+          }),
+          arguments: [
+            ensureJs(currentJs),
+            FILTERS[expr.id] ?
+              FILTERS[expr.id].getArguments(expr as Token, opts) :
+              pojsoToAST(reifyProperties(expr.options))
+          ],
+          optional: true,
+        }
+        break;
+      }
+    }
+    chain();
+
+  }
+  function chain() {
+    if (lastChained === currentJs) return currentJs;
+    lastChained = currentJs = _chain!(currentJs!)
+  }
+  console.log("output JS AST:", currentJs);
+  return ensureJs(currentJs);
+}
+
+
+
+const withThis = (opts: any): ToJsExpressionOpts => ({
+  ...opts,
+  transformers: {
+    root(expr: ESTree.Expression): ESTree.Expression {
+      return {
+        type: "MemberExpression",
+        object: {
+          type: "Identifier",
+          name: "this"
+        },
+        property: expr,
+        optional: true,
+        computed: false,
+      }
+    }
+  }
+})
+function alpinify(
+  component: Component,
+  opts: {
+    statesObj: Record<Properties, RealState>;
+    tagName: string; dataTree: DataTree;
+    statesPrivate: { stateId: StateId; label: string; tokens: State[]; }[];
+    statesPublic: {
+      stateId: StateId; label: string; tokens: State[];
+
+    }[];
+    originalAttributes: Record<string, string>;
+    attributeStates: { stateId: string; label: string; value: string; }[];
+  }) {
+
+  const events: (Backbone.Model<{}> | {
+    id: string,
+    name: string,
+    expression: string,
+    modifiers: {
+      id: string,
+      name: string
+    }[]
+  })[] = component.get('events');
+  const hasData = Object.values(opts.statesPublic).length;
+  const boundAttributes = getBoundAttributes(component, opts);
+  const attrs: any = {
+    ...opts.originalAttributes,
+    ...(boundAttributes),
+    'x-data': !hasData ? true : sanitizeId(component.getId()),
+    'x-html': maybeAwaitJs(genJs(
+      ensureFilteredData(
+        toJsExpression(
+          opts?.statesObj?.innerHTML?.tokens,
+          {
+            component,
+            transformers: {
+              middleware: CHAIN_FILTERS(undefined, { component })
+            }
+          }
+        ), opts?.statesObj?.innerHTML?.tokens), { minify: true })),
+    ...(Object.fromEntries(
+      (events || [])
+        .map((e: any) => e.toJSON instanceof Function ? e.toJSON() : e)
+        .filter(e => e.expression)
+        .map(e => {
+          console.log("Event:", e);
+          return ([
+            'x-on:' + [e.name, ...(e.modifiers ? e.modifiers.map(m => m.name) : [])].join('.'),
+            genJs(toJsExpression(JSON.parse(e.expression), { component }), { minify: true })
+          ])
+        })
+    )),
+  };
+  if (!attrs['x-html'] || attrs['x-html'] === 'null') {
+    delete attrs['x-html']
+  }
+  component.removeAttributes(Object.keys(component.getAttributes()));
+  component.addAttributes(attrs);
+  return component;
+}
+
+function toJsCondition(component: Component, condition: { expression: Token[]; expression2?: Token[]; operator: UnariOperator | BinariOperator; }): ESTree.Expression {
+  const exprs = [condition.expression, condition.expression2].filter(Boolean).map(e => toJsExpression(e!));
+  switch (condition.operator) {
+    case UnariOperator.NOT_EMPTY_ARR:
+    case UnariOperator.EMPTY_ARR:
+      const lengthExpr: ESTree.MemberExpression = {
+        type: "MemberExpression",
+        object: exprs[0],
+        property: {
+          type: "Literal",
+          value: "length"
+        },
+        computed: false,
+        optional: true,
+      };
+      return condition.operator === UnariOperator.NOT_EMPTY_ARR ?
+        lengthExpr :
+        {
+          type: "UnaryExpression",
+          prefix: true,
+          operator: "!",
+          argument: lengthExpr
+        }
+    case UnariOperator.FALSY:
+      return {
+        type: "UnaryExpression",
+        prefix: true,
+        operator: "!",
+        argument: exprs[0]
+      }
+    case UnariOperator.TRUTHY:
+      return exprs[0];
+    default:
+      return {
+        type: "BinaryExpression",
+        operator: condition.operator,
+        left: exprs[0],
+        right: exprs[1]
+      }
+  }
+}
+
+function toJsVarName(arg0: string): string {
+  return arg0.replace(/-/gi, '$');
+}
+
+function sanitizeId(arg0: string): string {
+  return arg0.replace(/-/gi, '_');
+}
+
+function getBoundAttributes(component: Component, opts: Parameters<typeof alpinify>["1"]) {
+  return Object.fromEntries(
+    opts
+      .statesPrivate
+      .filter(({ label }) => isAttribute(label))
+      .map(
+        s => [
+          ':' + s.label,
+          maybeAwaitJs(genJs(ensureFilteredData(
+            toJsExpression(
+              s.tokens,
+              {
+                component,
+                transformers: {
+                  middleware: CHAIN_FILTERS(undefined, { component })
+                }
+              }
+            ), s.tokens), { minify: true }))
+        ])
+  )
+}
+
+
+
+
+
+function pojsoToAST(options: Options): ESTree.ObjectExpression {
+  return {
+    type: "ObjectExpression",
+    properties: Object.entries(options).map((e: any[]): ESTree.Property => ({
+      type: "Property",
+      key: {
+        type: "Literal",
+        value: e[0]
+      },
+      value: e[1].type ? e[1] as ESTree.Expression : {
+        type: "Literal",
+        value: e[1] as any
+      },
+      shorthand: false,
+      kind: "init",
+      computed: false,
+      method: false
+    }))
+  }
+}
+
+function reifyProperties(options: any): Options {
+  return Object.fromEntries(
+    Object.entries(options)
+      .map(e => [e[0], toJsExpression(tryParse(e[1] as any))])
+  )
+}
+
+function unwrapValue(options: any): Options {
+
+  return reifyProperties(options);
+}
+
+function tryParse(arg0: string): any {
+  try {
+    return (arg0 as string).trim().charAt(0) === '[' ? JSON.parse(arg0) : arg0
+  } catch (e) {
+    return arg0;
+  }
+}
+
+
+
+function ensureFilteredData(arg0: ESTree.Expression, tokens: Token[], forceEnsure:boolean = false): ESTree.Expression {
+  if (!tokens || !tokens.length) return arg0;
+  let ensure = forceEnsure || tokens?.[0]?.type === 'property' && Boolean(tokens[0].dataSourceId);
+  // ensure = ensure || tokens?.[0]?.type === 'state';
+  const filtered = tokens.find(t => t.type === 'filter');
+
+  if (ensure) {
+    arg0 = {
+      type: "CallExpression",
+      callee: {
+        type: "MemberExpression",
+        object: arg0,
+        property: {
+          type: "Identifier",
+          name: "$ENSURE"
+        },
+        optional: true,
+        computed: false
+      },
+      arguments: [],
+      optional: true
+    }
+  }
+  if (filtered) {
+    arg0 = {
+      type: "CallExpression",
+      callee: {
+        type: "MemberExpression",
+        object: arg0,
+        property: {
+          type: "Identifier",
+          name: "filtered"
+        },
+        optional: true,
+        computed: false
+      },
+      optional: true,
+      arguments: []
+    }
+  }
+  return arg0;
+}
+
+
+const ints = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map(String);
+const primitiveLiterals = ['true', 'false', 'null', 'undefined', '{', '[']
+function maybeAwaitJs(arg0: string) {
+  arg0 = arg0.trimStart();
+  if (ints.includes(arg0.charAt(0)) || primitiveLiterals.findIndex(l => arg0.indexOf(l) === 0) !== -1) {
+    return arg0;
+  }
+  return "await " + arg0;
+
+}
+
+function getAlpineStoreScript(component: Component, config: ClientConfig): string {
+  const exprs: (Token & { index: number })[] = getAllExpressions(component);
+  console.log("all expressions:", exprs);
+  const dsRefs: Property[] = exprs.filter((expr) => isDataSourceField(expr as any) && expr?.type === 'property' && expr?.dataSourceId) as any[];
+
+  console.log("Data source refs...", dsRefs);
+  const dsRefsGrouped = dsRefs
+  .filter(dsRef => {
+    const doc = getOpenApiDoc(dsRef, config);
+    return Boolean(doc.fieldMappings[dsRef.fieldId])
+  })
+  .reduce((obj, ref) => {
+    obj[ref.dataSourceId!] ??= [];
+    if (!obj[ref.dataSourceId!].find(r => r.fieldId === ref.fieldId)) {
+      obj[ref.dataSourceId!].push(ref);
+    }
+    return obj;
+  }, {} as Record<string, Property[]>)
+  let js = '';
+  Object.entries(dsRefsGrouped).forEach(([dataSourceId, dsRefs]) => {
+    const dataObj: ESTree.ObjectExpression = {
+      type: "ObjectExpression",
+      properties: dsRefs.map(dsRef => ({
+        type: "Property",
+        key: {
+          type: "Literal",
+          value: dsRef.fieldId
+        },
+        value: {
+          type: "CallExpression",
+          callee: {
+            type: "Identifier",
+            name: "reloadable"
+          },
+          arguments: [
+            {
+              type: "MemberExpression",
+              object: {
+                type: "MemberExpression",
+                object: {
+                  type: "Identifier",
+                  name: "$pagedata"
+                },
+                property: {
+                  type: "Literal",
+                  value: dsRef.dataSourceId!
+                },
+                computed: true,
+                optional: true,
+              },
+              property: {
+                type: "Literal",
+                value: dsRef.fieldId
+              },
+              computed: true,
+              optional: true
+            },
+            {
+              type: "ArrowFunctionExpression",
+              params: [
+                {
+                  type: "Identifier",
+                  name: "opts"
+                }
+              ],
+              expression: true,
+              body: {
+                type: "CallExpression",
+                callee: {
+                  type: "MemberExpression",
+                  object: {
+                    type: "Identifier",
+                    name: "this"
+                  },
+                  optional: true,
+                  computed: false,
+                  property: {
+                    type: "MemberExpression",
+                    object: {
+                      type: "Identifier",
+                      name: "$store"
+                    },
+                    property: {
+                      type: "Identifier",
+                      name: "fetch"
+                    },
+                    optional: false,
+                    computed: false
+                  }
+                },
+                arguments: [
+                  {
+                    type: "Identifier",
+                    name: "opts"
+                  },
+                  {
+                    type: "ObjectExpression",
+                    properties: [
+                      {
+                        type: "Property",
+                        key: {
+                          type: "Literal",
+                          value: "method"
+                        },
+                        value: {
+                          type: "Literal",
+                          value: getHttpMethod(dsRef, config)
+                        },
+                        kind: "init",
+                        method: false,
+                        shorthand: false,
+                        computed: false
+                      }
+                    ]
+                  }
+                ],
+                optional: false,
+              }
+            }
+          ],
+          optional: false,
+        },
+        kind: "init",
+        computed: false,
+        shorthand: false,
+        method: false
+      }
+      )),
+    };
+    const storeStmt: ESTree.CallExpression = {
+      type: "CallExpression",
+      callee: {
+        type: "MemberExpression",
+        object: {
+          type: "Identifier",
+          name: "Alpine"
+        },
+        property: {
+          type: "Identifier",
+          name: "store"
+        },
+        optional: false,
+        computed: false
+      },
+      arguments: [
+        {
+          type: "Literal",
+          value: dataSourceId!
+        },
+        dataObj
+      ],
+      optional: false
+    }
+    js += genJs(storeStmt) + ';\n'
+  });
+  return js;
+}
+function onAlpineInit(js:string) {
+  return `document.addEventListener('alpine:init', () => {\n${js}\n})`;
+}
+
+function getAllExpressions(component: Component): (Token & { index: number })[] {
+  const childExprs = [] as any;
+  component.forEachChild(component => {
+    childExprs.push(...getAllExpressions(component));
+  })
+  const events = component.get('events') || [];
+  console.log("Events:", events);
+  const eventExpressions = events
+    ?.flatMap?.(
+      e => e?.expression ?
+        JSON.parse(e.expression)
+          ?.flatMap(
+            e => Object.values(e.options)
+              .map((v: any) => tryParse('' + v))
+              .filter(v => v instanceof Array)
+              .flatMap(v => v)
+              ?.map?.((v, i) => ({ ...v, index: i })
+              )) : []);
+  console.log("event expressions:", eventExpressions);
+  const exprs = ((component.get('publicStates') || [])
+    ?.flatMap?.(e => e?.expression?.map?.((v, i) => ({ ...v, index: i }))))
+    .concat(
+      ((component.get('privateStates') || [])
+        ?.flatMap?.(e => e?.expression?.map?.((v, i) => ({ ...v, index: i }))))
+    )
+    /**
+     * @todo fuck me make this recursive...
+     */
+    .concat(
+      eventExpressions
+    )
+
+  const ret = exprs.concat(childExprs)
+  console.log("exprs:", ret);
+  return ret;
+
+
+
+}
+
+function isDataSource(dataSourceId: import("@silexlabs/grapesjs-data-source").DataSourceId): unknown {
+  return String(dataSourceId).indexOf('ds-') === 0
+}
+
+function getHttpMethod(dsRef: Property, config: ClientConfig): string {
+  const doc = getOpenApiDoc(dsRef, config); 
+  console.log("doc:", doc);
+  const mappings = doc?.fieldMappings;
+  console.log('mappings:', mappings);
+  const mapping = mappings?.[dsRef.fieldId];
+  console.log('mapping:', mapping);
+  const method = mapping?.method;
+  console.log('method', method);
+  return method;
+  /**
+   * @todo handle openapi field mappings....
+   */
+  // if (!src.fieldMappings) {
+  //   src.fieldMappings = Object.fromEntries(Object.entries(src.get('doc').path).map( => [snakecase(v), {
+  //     path: v,
+  //     method: 
+  //   }]));
+  // }
+  // return dsRef.fieldId.split(' ').shift()!;
+}
+const METHODS = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS', 'QUERY']
+function isDataSourceField(expr: Property & { index: number; }) {
+  if (!expr.dataSourceId || !isDataSource(expr.dataSourceId)) return;
+  if (!expr.fieldId) return;
+  // const ret = METHODS.includes(expr.fieldId.split(' ')[0])
+  // console.log("data source?", expr, expr.fieldId);
+  return true;
+}
+
+function getBoilerplateScript(component: Component, config: ClientConfig): string {
+
+  const actions =
+    `Alpine.store('actions', {
+    ${Object.entries(ACTIONS_JS).map(e => `
+      "${e[0]}": ${e[1].toString().trim()}`)}
+  })`
+  const filterFns = getFilters(null as any);
+  console.log("filter fns:", filterFns.map(f => [f.id, f.apply.toString().trim()]))
+  const filters =
+    `Alpine.store('filters', {
+      ${filterFns.map(fn =>
+      `
+        "${fn.id}": ${fn.apply.toString().trim()}`
+    )}
+    })`
+  const dataStores = getAlpineStoreScript(component, config);
+  const scripts = [STORE_JS, actions, filters, dataStores];
+  const ret = scripts.join('\n');
+  console.log("boilerplate", ret);
+  return onAlpineInit(ret);
+}
+
+function getOpenApiDoc(dsRef: Property, config: ClientConfig) {
+  const editor: DataSourceEditor = config.getEditor() as any;
+  const mgr = editor.DataSourceManager;
+  const src: any = mgr.get(dsRef.dataSourceId!);
+  const doc = src.get('doc');
+  return doc;
+}
 //function transformFile(file: ClientSideFile/*, options: EleventyPluginOptions*/): ClientSideFile {
 //  //const fileWithContent = file as ClientSideFileWithContent
 //  switch (file.type) {

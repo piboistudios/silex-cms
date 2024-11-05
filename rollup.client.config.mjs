@@ -8,8 +8,9 @@ export default {
     file: 'dist/client.js',
     format: 'es',
     sourcemap: true,
+   
   },
-  //external: ['@silexlabs/silex', 'grapesjs'],
+  external: ['abstract-syntax-tree', /* '@silexlabs/silex', */ /* 'grapesjs' */],
   plugins: [
     typescript({
       tsconfig: 'tsconfig.client.json',
@@ -22,5 +23,6 @@ export default {
         ],
       },
     }),
+
   ],
 }

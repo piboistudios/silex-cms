@@ -8,7 +8,7 @@ const cmdPauseAutoSave = 'pause-auto-save'
 
 export default function(config: ClientConfig, opts: EleventyPluginOptions): void {
   config.on('silex:startup:end', () => {
-    const editor = config.getEditor() as DataSourceEditor
+    const editor = config.getEditor() as unknown as DataSourceEditor
     const dm = editor.DataSourceManager
     if(!dm) {
       throw new Error('No DataSourceManager found, did you forget to add the DataSource plugin?')

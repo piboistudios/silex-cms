@@ -2,7 +2,9 @@ import { Field, Filter, Options, State, getContext, getPersistantId, getStateVar
 import { EleventyPluginOptions } from '../client'
 import { html } from 'lit-html'
 import { Component } from 'grapesjs'
-
+export const FILTER_JS = [
+  
+]
 export default function(config, opts: EleventyPluginOptions): void {
   config.on('silex:startup:end', () => {
     const dm = config.getEditor().DataSourceManager
