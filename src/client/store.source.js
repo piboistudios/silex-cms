@@ -7,6 +7,7 @@ if (window && window?.pagedata) {
         console.error('Failed to parse pagedata:', e);
     }
 }
+Alpine.directive('rm', (el) => el.remove());
 const FILTERS = Symbol('filters');
 const FETCH = Symbol('fetch');
 

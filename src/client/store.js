@@ -155,7 +155,7 @@ function reloadable(obj, _fetch, _ensure, opts = {}, root) {
                 if (root.$$empty) {
                     return fetch();
                 }
-                else return reloadable(ensure(target), fetch, ensure);
+                else return ensure(p);
             }
             if (prop === '$$empty') return obj[prop];
             if (prop === FETCH) return fetch;

@@ -19,7 +19,8 @@
     "lint": "eslint 'src/**/*.ts'",
     "lint:fix": "$npm_execpath run lint -- --fix",
     "test": "jest --rootDir src --config jest.config.js",
-    "test:watch": "$npm_execpath run test -- --watch"
+    "test:watch": "$npm_execpath run test -- --watch",
+    "pub": "npm i ../libs/silexlabs-grapesjs-data-source-0.0.119.tgz && npm run build && npm pack --pack-destination=../api/libs"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",

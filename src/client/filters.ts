@@ -74,7 +74,7 @@ export default function(config, opts: EleventyPluginOptions): void {
         let c = selected
         while(c) {
           if(getPersistantId(c) === state.componentId) return c
-          c = c.parent()
+          c = c.parent()!
         }
         return null
       })()

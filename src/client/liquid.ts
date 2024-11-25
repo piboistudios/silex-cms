@@ -1,7 +1,9 @@
-import { Expression, FIXED_TOKEN_ID, Filter, Property, State, StateId, Token, getPersistantId, getStateVariableName, DataTree, BinariOperator, UnariOperator, getExpressionResultType, toExpression } from '@silexlabs/grapesjs-data-source'
+import { Expression, FIXED_TOKEN_ID, Filter, Property, State, StateId, Token, getPersistantId, getStateVariableName, DataTree, BinariOperator, UnariOperator, getExpressionResultType, toExpression, DataSourceEditor, StoredProperty, StoredFilter } from '@silexlabs/grapesjs-data-source'
 import { Component } from 'grapesjs'
 import { EleventyDataSourceId } from './DataSource'
-
+import OpenApi from '@silexlabs/grapesjs-data-source/src/datasources/OpenApi'
+import snakecase from 'snakecase';
+import { isFixed, isHttp, isState, parseEntries } from './utils';
 export interface BinaryCondition {
   operator: BinariOperator,
   expression: Expression,
@@ -26,9 +28,9 @@ export function echoBlock(component: Component, expression: Expression): string 
   const statements = getLiquidBlock(component, expression)
   return `{% liquid
     ${statements
-    .map(({ liquid }) => liquid)
-    .join('\n\t')
-}
+      .map(({ liquid }) => liquid)
+      .join('\n\t')
+    }
     echo ${statements[statements.length - 1].variableName}
   %}`
 }
@@ -45,7 +47,7 @@ export function echoBlock1line(component: Component, expression: Expression): st
   return `{% ${statements
     .map(({ liquid }) => liquid)
     .join(' %}{% ')
-  } %}{{ ${statements[statements.length - 1].variableName} }}`
+    } %}{{ ${statements[statements.length - 1].variableName} }}`
 }
 
 /**
@@ -59,9 +61,9 @@ export function assignBlock(stateId: StateId, component: Component, expression: 
   if (!persistantId) throw new Error('This component has no persistant ID')
   return `{% liquid
     ${statements
-    .map(({ liquid }) => liquid)
-    .join('\n\t')
-}
+      .map(({ liquid }) => liquid)
+      .join('\n\t')
+    }
     assign ${getStateVariableName(persistantId, stateId)} = ${statements[statements.length - 1].variableName}
   %}`
 }
@@ -85,9 +87,9 @@ export function loopBlock(dataTree: DataTree, component: Component, expression: 
   }
   return [`{% liquid
     ${statements
-    .map(({ liquid }) => liquid)
-    .join('\n\t')
-}
+      .map(({ liquid }) => liquid)
+      .join('\n\t')
+    }
     %}
     {% for ${getStateVariableName(persistantId, '__data')} in ${loopDataVariableName} %}
   `, '{% endfor %}']
@@ -123,9 +125,9 @@ export function ifBlock(component: Component, condition: Condition): [start: str
   // Get liquid for the whole if block
   return [`{% liquid
     ${statements
-    .map(({ liquid }) => liquid)
-    .join('\n\t')
-}
+      .map(({ liquid }) => liquid)
+      .join('\n\t')
+    }
     %}
     {% if ${unary ? getUnaryOp(lastVariableName, unary.operator) : getBinaryOp(lastVariableName, lastVariableName2, binary!.operator)} %}
   `, '{% endif %}']
@@ -133,21 +135,21 @@ export function ifBlock(component: Component, condition: Condition): [start: str
 
 function getUnaryOp(variableName: string, operator: UnariOperator): string {
   switch (operator) {
-  case UnariOperator.TRUTHY: return `${variableName} and ${variableName} != blank and ${variableName} != empty`
-  case UnariOperator.FALSY: return `not ${variableName}`
-  case UnariOperator.EMPTY_ARR: return `${variableName}.size == 0`
-  case UnariOperator.NOT_EMPTY_ARR: return `${variableName}.size > 0`
+    case UnariOperator.TRUTHY: return `${variableName} and ${variableName} != blank and ${variableName} != empty`
+    case UnariOperator.FALSY: return `not ${variableName}`
+    case UnariOperator.EMPTY_ARR: return `${variableName}.size == 0`
+    case UnariOperator.NOT_EMPTY_ARR: return `${variableName}.size > 0`
   }
 }
 
 function getBinaryOp(variableName: string, variableName2: string, operator: BinariOperator): string {
   switch (operator) {
-  case BinariOperator.EQUAL: return `${variableName} == ${variableName2}`
-  case BinariOperator.NOT_EQUAL: return `${variableName} != ${variableName2}`
-  case BinariOperator.GREATER_THAN: return `${variableName} > ${variableName2}`
-  case BinariOperator.LESS_THAN: return `${variableName} < ${variableName2}`
-  case BinariOperator.GREATER_THAN_OR_EQUAL: return `${variableName} >= ${variableName2}`
-  case BinariOperator.LESS_THAN_OR_EQUAL: return `${variableName} <= ${variableName2}`
+    case BinariOperator.EQUAL: return `${variableName} == ${variableName2}`
+    case BinariOperator.NOT_EQUAL: return `${variableName} != ${variableName2}`
+    case BinariOperator.GREATER_THAN: return `${variableName} > ${variableName2}`
+    case BinariOperator.LESS_THAN: return `${variableName} < ${variableName2}`
+    case BinariOperator.GREATER_THAN_OR_EQUAL: return `${variableName} >= ${variableName2}`
+    case BinariOperator.LESS_THAN_OR_EQUAL: return `${variableName} <= ${variableName2}`
   }
 }
 
@@ -155,8 +157,8 @@ let numNextVar = 0
 /**
  * Pagination data has no filter and no states in it
  */
-export function getPaginationData(expression: Property[]): string {
-  const statement = getLiquidStatementProperties(expression)
+export function getPaginationData(component: Component, expression: Property[]): string {
+  const statement = getLiquidStatementProperties(component, expression)
   const firstToken = expression[0]
   if (firstToken) {
     if (!firstToken.dataSourceId || firstToken.dataSourceId === EleventyDataSourceId) {
@@ -173,12 +175,29 @@ export function getPaginationData(expression: Property[]): string {
  */
 export function getLiquidBlock(component: Component, expression: Expression): { variableName: string, liquid: string }[] {
   if (expression.length === 0) return []
+  expression = expression.slice();
   const result = [] as { variableName: string, liquid: string }[]
   const firstToken = expression[0]
   let lastVariableName = ''
   if (firstToken.type === 'filter') throw new Error('Expression cannot start with a filter')
   if (firstToken.type === 'property' && firstToken.dataSourceId && firstToken.dataSourceId !== 'eleventy') {
-    lastVariableName = firstToken.dataSourceId as string
+    const optVarName = getOptId(component, firstToken);
+    const dsPropRef = `${firstToken.dataSourceId}.${getFieldId(component, firstToken)}`;
+    const tempName = snakecase(dsPropRef + '_' + numNextVar++);
+    const substitutionPairs: string = getSubstitutionOptions(component, firstToken);
+    const filters:Filter[] = [];
+    for (const tok of expression.slice(1)) {
+      if (tok.type !== 'filter') break;
+      else filters.push(tok as Filter);
+    }
+    result.push({
+      variableName: tempName,
+      liquid: `assign ${tempName} = ${dsPropRef} | call_with_opts: ${optVarName}${substitutionPairs ? ', ' + substitutionPairs : ''} ${
+        getLiquidStatementFilters(component, filters)
+      }`
+    });
+    lastVariableName = tempName;
+    expression.splice(filters.length);
   }
   const rest = [...expression]
   while (rest.length) {
@@ -189,7 +208,7 @@ export function getLiquidBlock(component: Component, expression: Expression): { 
     const firstNonFilterIndex = rest.findIndex(token => token.type !== 'filter')
     const filterExpression = firstNonFilterIndex === -1 ? rest.splice(0) : rest.splice(0, firstNonFilterIndex)
     const variableName = getNextVariableName(component, numNextVar++)
-    const statement = getLiquidStatement(variableExpression.concat(filterExpression), variableName, lastVariableName)
+    const statement = getLiquidStatement(component, variableExpression.concat(filterExpression), variableName, lastVariableName)
     lastVariableName = variableName
     result.push({
       variableName,
@@ -212,7 +231,7 @@ export function getNextVariableName(component: Component, numNextVar: number): s
  * 
  * Example of return value: `countries.continent.countries | first.name`
  */
-export function getLiquidStatement(expression: Expression, variableName: string, lastVariableName: string = ''): string {
+export function getLiquidStatement(component: Component, expression: Expression, variableName: string, lastVariableName: string = ''): string {
   if (expression.length === 0) throw new Error('Expression cannot be empty')
   // Split expression in 2: properties and filters
   const firstFilterIndex = expression.findIndex(token => token.type === 'filter')
@@ -225,37 +244,37 @@ export function getLiquidStatement(expression: Expression, variableName: string,
   }
   // Start with the assign statement
   return `assign ${variableName} = ${lastVariableName ? `${lastVariableName}.` : ''
-  }${
+    }${
     // Add all the properties
-    getLiquidStatementProperties(properties)
-  }${
+    getLiquidStatementProperties(component, properties)
+    }${
     // Add all the filters
-    getLiquidStatementFilters(filters)
-  }`
+    getLiquidStatementFilters(component, filters)
+    }`
 }
 
-export function getLiquidStatementProperties(properties: (Property | State)[]): string {
+export function getLiquidStatementProperties(component: Component, properties: (Property | State)[]): string {
   return properties.map((token, index) => {
     switch (token.type) {
-    case 'state': {
-      if (index !== 0) throw new Error('State can only be the first token in an expression')
-      return getStateVariableName(token.componentId, token.storedStateId)
-    }
-    case 'property': {
-      if (token.fieldId === FIXED_TOKEN_ID) {
-        return `"${token.options?.value ?? ''}"`
+      case 'state': {
+        if (index !== 0) throw new Error('State can only be the first token in an expression')
+        return getStateVariableName(token.componentId, token.storedStateId)
       }
-      return token.fieldId
-    }
-    default: {
-      throw new Error(`Only state or property can be used in an expression, got ${(token as Token).type}`)
-    }
+      case 'property': {
+        if (token.fieldId === FIXED_TOKEN_ID) {
+          return `"${token.options?.value ?? ''}"`
+        }
+        return token.fieldId;
+      }
+      default: {
+        throw new Error(`Only state or property can be used in an expression, got ${(token as Token).type}`)
+      }
     }
   })
     .join('.')
 }
 
-export function getLiquidStatementFilters(filters: Filter[]): string {
+export function getLiquidStatementFilters(component: Component, filters: Filter[]): string {
   if (!filters.length) return ''
   return ' | ' + filters.map(token => {
     const options = token.options ? Object.entries(token.options)
@@ -272,7 +291,7 @@ export function getLiquidStatementFilters(filters: Filter[]): string {
         return a.order - b.order
       })
       // Convert the options to liquid
-      .map(({ key, value }) => handleFilterOption(token, key, value as string)) : []
+      .map(({ key, value }) => handleFilterOption(component, token, key, value as string)) : []
     return `${token.filterName ?? token.id}${options.length ? `: ${options.join(', ')}` : ''}`
   })
     .join(' | ')
@@ -288,24 +307,24 @@ function quote(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`
 }
 
-function handleFilterOption(filter: Filter, key: string, value: string): string {
+function handleFilterOption(component: Component, filter: Filter, key: string, value: string): string {
   try {
     const expression = toExpression(value)
     if (expression) {
-      const result = expression.map(token => {
+      const result = expression.map((token, idx) => {
         switch (token.type) {
-        case 'property': {
-          if (token.fieldId === FIXED_TOKEN_ID) {
-            return `"${token.options?.value ?? ''}"`
+          case 'property': {
+            if (token.fieldId === FIXED_TOKEN_ID) {
+              return `"${token.options?.value ?? ''}"`
+            }
+            return token.fieldId;
           }
-          return token.fieldId
-        }
-        case 'state': {
-          return getStateVariableName(token.componentId, token.storedStateId)
-        }
-        case 'filter': {
-          throw new Error('Filter cannot be used in a filter option')
-        }
+          case 'state': {
+            return getStateVariableName(token.componentId, token.storedStateId)
+          }
+          case 'filter': {
+            throw new Error('Filter cannot be used in a filter option')
+          }
         }
       })
         .join('.')
@@ -316,3 +335,53 @@ function handleFilterOption(filter: Filter, key: string, value: string): string 
   }
   return filter.quotedOptions?.includes(key) ? quote(value) : value
 }
+export function getTokenDataSource(component: Component, token: Property) {
+  const frame = component.frame!;
+  if (!frame) throw new Error("Why no component frame...?");
+  const editor = frame.em.Editor as DataSourceEditor;
+  if (!editor) throw new Error("why no editor..?");
+  const dataTree = editor.DataSourceManager.getDataTree();
+  return dataTree.dataSources.find(ds => ds.id === token.dataSourceId);
+}
+export function getFieldId(component: Component, token: Property): any {
+  if (!token.dataSourceId) return token.fieldId;
+
+  const wrapper: Component | undefined = getWrapperComponent(component);
+  if (!wrapper) throw new Error('why no wrapper?');
+
+  const fieldIds = wrapper.get('fieldIds') || {};
+  fieldIds[token.dataSourceId] ??= {};
+  fieldIds[token.dataSourceId!][token.fieldId] ??= {}
+  const key = (token.options ? OpenApi.toFieldId(token.dataSourceId, token.fieldId, JSON.stringify(token.options)) : '');
+  fieldIds[token.dataSourceId!][token.fieldId][key] ??= { fieldId: token.fieldId + '_' + Object.values(fieldIds[token.dataSourceId!][token.fieldId]).length, options: token.options };
+  wrapper.set('fieldIds', fieldIds);
+  return fieldIds[token.dataSourceId!][token.fieldId][key].fieldId;
+}
+function getOptId(component, token) {
+  return token.dataSourceId +'.'+ getFieldId(component, token) + '__opts';
+}
+function getWrapperComponent(component: Component): Component | undefined {
+  return component.frame?.getComponent?.();
+}
+/**
+ * server side tokens:
+ *  - fixed
+ *  - http
+ *  - state 
+ */
+/**
+ * 
+ * @param component 
+ * @param firstToken 
+ */
+function getSubstitutionOptions(component: Component, firstToken: StoredProperty): string {
+  if (!firstToken.options) return '';
+  const opts = firstToken.options;
+  const parsed = parseEntries(opts);
+  const serverSideFields = parsed.filter(
+    ([k, expr]: [string, any]) =>
+      isState(expr[0])
+  );
+  return serverSideFields.map(e => `"${e[0]}", ${getLiquidStatementProperties(component, e[1] as any)}`).join(', ')
+}
+

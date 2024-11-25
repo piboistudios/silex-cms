@@ -3,16 +3,17 @@ import STORE_JS from './store.source.js';
 import { Component, Page } from 'grapesjs'
 import getFilters from '@silexlabs/grapesjs-data-source/src/filters/liquid'
 import { minify_sync } from 'terser'
-import { BinariOperator, DataSourceEditor, DataTree, Expression, Filter, IDataSourceModel, NOTIFICATION_GROUP, Options, Properties, Property, PropertyOptions, State, StateId, StoredState, StoredStateWithId, Token, UnariOperator, fromStored, getPersistantId, getState, getStateIds, getStateVariableName, toExpression } from '@silexlabs/grapesjs-data-source'
+import { BinariOperator, DataSourceEditor, DataTree, Expression, Filter, IDataSourceModel, NOTIFICATION_GROUP, Options, Properties, Property, PropertyOptions, State, StateId, StoredState, StoredStateWithId, StoredToken, Token, UnariOperator, fromStored, getOrCreatePersistantId, getPersistantId, getState, getStateIds, getStateVariableName, toExpression } from '@silexlabs/grapesjs-data-source'
 import * as ESTree from 'estree';
 import * as AST from 'astring';
-import { assignBlock, echoBlock, echoBlock1line, getPaginationData, ifBlock, loopBlock } from './liquid'
+import { assignBlock, echoBlock, echoBlock1line, getFieldId, getPaginationData, ifBlock, loopBlock } from './liquid'
 import { EleventyPluginOptions, Silex11tyPluginWebsiteSettings } from '../client'
 import { PublicationTransformer } from '@silexlabs/silex/src/ts/client/publication-transformers'
 import { ClientConfig } from '@silexlabs/silex/src/ts/client/config'
 import { UNWRAP_ID } from './traits'
 import { EleventyDataSourceId } from './DataSource'
 import { ACTIONS_JS } from './actions';
+import { isFixed, isHttp, isState, parseEntries, tryParse } from './utils.js';
 //import { ClientSideFile, ClientSideFileType, ClientSideFileWithContent, PublicationData } from '@silexlabs/silex/src/ts/types'
 const minify = minify_sync;
 // FIXME: should be imported from silex
@@ -40,7 +41,7 @@ const ATTRIBUTE_MULTIPLE_VALUES = ['class', 'style']
  * The cache is cleared every time the publication is done
  * This is a workaround because grapesjs editor.getHtml will call each component's toHtml method multiple times
  */
-const cache = new Map<string, string>()
+export const cache = new Map<string, any>()
 
 /**
  * A state with the real tokens instead of the stored tokens
@@ -73,13 +74,18 @@ export default function (config: ClientConfig, options: EleventyPluginOptions) {
       // Transform the files content
       //transformFile: (file) => transformFile(file),
     })
+    editor.on('silex:publish:start', () => {
+      editor.getWrapper()?.unset?.('fieldIds');
+    })
 
     if (options.enable11ty) {
       // Generate 11ty data files
       // FIXME: should this be in the publication transformers
-      editor.on('silex:publish:page', data => withNotification(() => transformPage(editor, data), editor, null))
-      editor.on('silex:publish:data', ({ data/*, preventDefault, publicationManager */ }) => withNotification(() => transformFiles(editor, options, data), editor, null))
-      editor.on('silex:publish:end', () => cache.clear())
+      // editor.on('silex:publish:page', data => withNotification(() => transformPage(editor, data), editor, null))
+      // editor.on('silex:publish:data', (data) => withNotification(() => transformFiles(editor, options, data), editor, null))
+      editor.on('silex:publish:end', () => {
+        cache.clear();
+      })
     }
   })
 }
@@ -175,7 +181,7 @@ export function getFrontMatter(page: Page, settings: Silex11tyPluginWebsiteSetti
       if (expression.filter(token => token.type !== 'property').length > 0) {
         console.warn('Expression for pagination data has to contain only properties', expression.map(token => token.type))
       }
-      return getPaginationData(expression as Property[])
+      return getPaginationData(page.getMainFrame().getComponent(), expression as Property[])
     } else {
       // Probably not JSON (backward compat)
       return settings.eleventyPageData
@@ -533,6 +539,7 @@ export function buildAttributes(originalAttributes: Record<string, string>, attr
     .reduce((final, { stateId, label, value }) => {
       const existing = final.find(({ label: existingLabel }) => existingLabel === label)
       if (existing) {
+        if (label.indexOf('x-') === 0) return final;
         if (ATTRIBUTE_MULTIPLE_VALUES.includes(label)) {
           // Add to the original value
           existing.value += ' ' + value
@@ -577,38 +584,31 @@ function withNotification<T>(cbk: () => T, editor: DataSourceEditor, componentId
  * Render the components when they are published
  */
 function renderComponent(config: ClientConfig, component: Component, toHtml: () => string): string | undefined {
-  if (cache.has(component.getId())) {
-    return cache.get(component.getId())
+  const componentId = component.getId();
+  console.log("Rendering", component, component.tagName);
+  if (cache.has(componentId)) {
+    return cache.get(componentId)
   }
   const attributes = component.getAttributes();
   if (attributes["id"] === 'pagedata' && attributes.type === 'application/json') {
-    return '<script type="application/json" id="pagedata">{ pagedata | json}</script>'
+    return '<script type="application/json" id="pagedata">{{ pagedata | json }}</script>'
   }
   let script = String(component.defaults?.script) || ''
   const editor = config.getEditor() as unknown as DataSourceEditor
 
   const dataTree = editor.DataSourceManager.getDataTree()
+  const states = getStatesObj(config, component);
+  const { statesObj, statesPrivate, statesPublic } = states;
 
-  const statesPrivate = withNotification(() => getRealStates(dataTree, getStateIds(component, false)
-    .map(stateId => ({
-      stateId,
-      state: getState(component, stateId, false)!,
-    }))), editor, component.getId())
-
-  const statesPublic = withNotification(() => getRealStates(dataTree, getStateIds(component, true)
-    .map(stateId => ({
-      stateId,
-      state: getState(component, stateId, true)!,
-    }))), editor, component.getId())
   const reactive = componentIsReactive(component);
-  console.log("Component:", component, "is reactive?", reactive);
+  // console.log("Component:", component, "is reactive?", reactive);
   const unwrap = component.get(UNWRAP_ID)
   if (component.get('type') === 'wrapper') {
-
 
     component.unset('script');
     script = getBoilerplateScript(component, config);
     component.set('script', script);
+    // component.addAttributes({ "x-data": true });
     const existingScript = editor.Components.getById('pagedata');
     if (!existingScript) {
 
@@ -628,30 +628,19 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
     }
 
   }
+
   if (statesPrivate.length > 0 || statesPublic.length > 0 || unwrap || reactive) {
     const tagName = component.get('tagName')?.toLowerCase()
     if (tagName) {
       // Convenience key value object
-      const statesObj = statesPrivate
-        // Filter out attributes, keep only properties
-        .filter(({ label }) => !isAttribute(label))
-        // Add states
-        .concat(statesPublic)
-        .reduce((final, { stateId, label, tokens }) => ({
-          ...final,
-          [stateId]: {
-            stateId,
-            label,
-            tokens,
-          },
-        }), {} as Record<Properties, RealState>)
+
 
       const hasInnerHtml = !!statesObj.innerHTML?.tokens.length
       const hasCondition = !!statesObj.condition?.tokens.length
       const hasData = !!statesObj.__data?.tokens.length
 
       // Style attribute
-      const innerHtml = hasInnerHtml ? echoBlock(component, statesObj.innerHTML.tokens) : component.getInnerHTML()
+      let innerHtml = hasInnerHtml ? echoBlock(component, statesObj.innerHTML.tokens) : component.getInnerHTML()
       const operator = component.get('conditionOperator') ?? UnariOperator.TRUTHY
       const binary = operator && Object.values(BinariOperator).includes(operator)
       const win: any = window;
@@ -669,15 +658,16 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
         operator,
       }) : undefined;
       let [ifStart, ifEnd] = hasCondition ? ifBlock(component, condition!) : []
+      let reactiveForStart, reactiveForEnd;
       let originalAttributes = component.get('attributes') as Record<string, string>
       originalAttributes.class = component.getClasses().join(' ')
 
       const [forStart, forEnd] = hasData ? loopBlock(dataTree, component, statesObj.__data.tokens) : []
+      console.log("For start/end sh", { forStart, forEnd, component, tagName: component.tagName, reactive })
       const states = statesPublic
         .map(({ stateId, tokens }) => assignBlock(stateId, component, tokens))
         .join('\n')
-      let before = (states ?? '') + (forStart ?? '') + (ifStart ?? '')
-      let after = (ifEnd ?? '') + (forEnd ?? '')
+
       const attributeStates = statesPrivate
         // Filter out properties, keep only attributes
         .filter(({ label }) => isAttribute(label))
@@ -688,36 +678,40 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
           value: echoBlock(component, tokens),
         }));
       if (reactive) {
+        const fieldId = p => getFieldId(component, p)
         const parent = component.parent();
         if (parent && !parent.getAttributes?.()?.['x-data']) {
           parent.setAttributes({
             'x-data': true
           })
         }
-
-        component.unset('script');
-        script += '\n' + getAlpineDataScript(component)
-        component.set('script', script);
+        // component.unset('script');
+        // script += '\n' + getAlpineDataScript(component)
+        // component.set('script', script);
         // component.save({
         //   script: script
         // })
         if (hasCondition) {
-          ifStart = '';
-          ifEnd = '';
-          const clone = alpinify(component.clone(), { statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes, attributeStates });
-          const template = editor.addComponents({
-            tagName: 'template',
-            attributes: {
-              'x-if': genJs(toJsCondition(component, condition!), { minify: true })
-            },
-            content: clone.toHTML(),
+          ifStart = `<template x-data="${!hasAlpineData(component) ? '' : sanitizeId(getOrCreatePersistantId(component))}" x-if="` + genJs(toJsCondition(component, condition!), { minify: true }) + `">`;
+          ifEnd = '</template>';
+          // let clone = component.clone();
+          // (clone as any).$$conditionHandled = true;
+          // (clone as any).$$loopHandled = (component as any).$$loopHandled;
+          // clone = alpinify(clone, { config, statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes });
+          // // const template = editor.addComponents({
+          // //   tagName: 'template',
+          // //   attributes: {
+          // //     "x-data": true,
+          // //     'x-if': genJs(toJsCondition(component, condition!), { minify: true })
+          // //   },
+          // //   components: [clone],
+          // //   // content: clone.toHTML(),
 
-          })[0];
-          clone.remove();
-          const html = template.toHTML();
-          template.remove();
-          cache.set(component.getId(), html);
-          return html;
+          // // })[0];
+          // const html = renderComponent(config, template, template.toHTML.bind(template)) || '';
+          // template.remove();
+          // cache.set(componentId, html);
+          // return html;
         }
         if (forStart && forEnd) {
           const persistentId = getPersistantId(component);
@@ -726,50 +720,74 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
             throw new Error('This component has no persistant ID')
           }
           const stateVarName: string = toJsVarName(getStateVariableName(persistentId, '__data'))
-          const clone: Component = alpinify(component.clone(), { statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes, attributeStates });
-          const attributes = clone.getAttributes();
-          delete attributes['x-rm'];
-          clone.setAttributes(attributes);
+          reactiveForStart = `<template x-data="${!hasAlpineData(component) ? '' : sanitizeId(getOrCreatePersistantId(component))}" x-for="` + `${stateVarName} in ${maybeAwaitJs(genJs(ensureFilteredData(toJsExpression(statesObj.__data.tokens, { transformers: { baseFieldId: fieldId } }), statesObj.__data.tokens), { minify: true }))}` + '">'
+          reactiveForEnd = '</template>';
+          console.log("set reactive for start/end", { reactiveForStart, reactiveForEnd, component });
+          // let clone = component.clone();
+          // (clone as any).$$loopHandled = true;
+          // (clone as any).$$conditionHandled = (component as any).$$conditionHandled;
+          // clone = alpinify(clone, { config, statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes });
+          // const attributes = clone.getAttributes();
+          // delete attributes['x-rm'];
+          // attributes['id'] = componentId;
+          // clone.setAttributes(attributes);
 
-          clone.unset('script');
-          const template = editor.addComponents({
-            tagName: 'template',
-            attributes: {
-              "x-for": `${stateVarName} in ${maybeAwaitJs(genJs(ensureFilteredData(toJsExpression(statesObj.__data.tokens), statesObj.__data.tokens), { minify: true }))}`
-            },
-            content: clone.toHTML()
-          })[0];
-          clone.remove();
+          // clone.unset('script');
+          // const template = editor.addComponents({
+          //   tagName: 'template',
+          //   attributes: {
+          //     "x-data": true,
+          //     "x-for": `${stateVarName} in ${maybeAwaitJs(genJs(ensureFilteredData(toJsExpression(statesObj.__data.tokens), statesObj.__data.tokens), { minify: true }))}`
+          //   },
+          //   components: [clone],
+          //   // content: clone.toHTML()
+          // })[0];
+          // const html = renderComponent(config, template, template.toHTML.bind(template)) || '';
+          // before = html + '\n' + before;
+          // template.remove();
 
-          before = template.toHTML() + '\n' + before;
-          template.remove();
-          component.addAttributes({
-            'x-data': true,
-            'x-rm': true
-          });
-        } else {
-          alpinify(component, { statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes, attributeStates })
         }
-        console.log("script for", tagName, ":", component.get('script'))
-        console.log("component" + tagName + ":", component)
+        component = alpinify(component, { config, statesObj, tagName, dataTree, statesPrivate, statesPublic, originalAttributes });
+        innerHtml = hasInnerHtml ? innerHtml : component.getInnerHTML()
+        // console.log("script for", tagName, ":", component.get('script'))
+        // console.log("component" + tagName + ":", component)
       }
-
+      let before = (states ?? '') + (forStart ?? '') + (ifStart ?? '')
+      let after = (ifEnd ?? '') + (forEnd ?? '')
+      console.log('for stuff or w/e', { forStart, forEnd, reactiveForStart, reactiveForEnd, component });
       // Attributes
       // Add css classes
       // Make the list of attributes
-      originalAttributes = component.get('attributes') as Record<string, string>
-      originalAttributes.class = component.getClasses().join(' ')
-      const attributes = buildAttributes(originalAttributes, attributeStates)
-
+      const atts = component.get('attributes') as Record<string, string>
+      atts.class = component.getClasses().join(' ')
+      const attributes = buildAttributes(atts, attributeStates)
+      const mkReactiveHtml = reactiveForStart && reactiveForEnd;
+      component.setAttributes(originalAttributes);
+      let html = '', reactiveHtml = '';;
       if (unwrap) {
-        const html = `${before}${innerHtml}${after}`
-        cache.set(component.getId(), html)
-        return html
+        html = `${before}${innerHtml}${after}`
+        if ((component as any).$$remove) {
+          component.remove();
+        }
+        cache.set(componentId, html)
       } else {
-        const html = `${before}<${tagName}${attributes ? ` ${attributes}` : ''}>${innerHtml}</${tagName}>${after}`
-        cache.set(component.getId(), html)
-        return html
+        html = `${before}<${tagName}${attributes ? ` ${attributes}` : ''}${mkReactiveHtml ? ' x-data x-rm' : ''}>${innerHtml}</${tagName}>${after}`
+        if (mkReactiveHtml) {
+          reactiveHtml = `${ifStart ?? ''}${reactiveForStart}<${tagName}${attributes ? ` ${attributes}` : ''}>${innerHtml}</${tagName}>${reactiveForEnd}${ifEnd ?? ''}`
+        }
+        if ((component as any).$$remove) {
+          component.remove();
+        }
       }
+      let ret;
+      if (reactiveForStart && reactiveForEnd) {
+        ret = reactiveHtml + '\n' + html;
+      } else {
+        ret = html;
+      }
+      cache.set(componentId, ret);
+
+      return ret;
     } else {
       // Not a real component
       // FIXME: understand why
@@ -777,7 +795,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
     }
   } else {
     const html = toHtml()
-    cache.set(component.getId(), html)
+    cache.set(componentId, html)
     return html
   }
 }
@@ -850,6 +868,7 @@ function transformPath(editor: DataSourceEditor, path: string, type: string, opt
 
 const MUTATORS = ['set_state', 'coalesce_w_state']
 function componentIsReactive(component: Component) {
+  if (hasReactiveAttributes(component)) return true;
   const parent = component.parent();
   const parentReactive = parent && componentIsReactive(parent);
   if (parentReactive && component.get('tagName')) return true;
@@ -857,20 +876,20 @@ function componentIsReactive(component: Component) {
   if (events && events.length) return true;
   const states = ((component.get('publicStates') || []) as StoredStateWithId[]).map(s => s.id)
   let reactive = false;
-  console.log("Component:", component);
+  // console.log("Component:", component);
   const checkReactive = (child: Component) => {
     if (reactive) return;
     const events: any[] = child.get('events');
-    console.log("events:", events);
-    console.log("child:", child);
+    // console.log("events:", events);
+    // console.log("child:", child);
     if (events && events.length) {
       for (const event of events) {
         if (!event.expression) continue;
         const expr: Token[] = JSON.parse(event.expression);
-        console.log("looking at event", event, "and expr:", expr);
+        // console.log("looking at event", event, "and expr:", expr);
         for (const token of expr) {
           if (token.type === 'property') {
-            console.log("looking property", token, "in", MUTATORS);
+            // console.log("looking property", token, "in", MUTATORS);
             if (
               MUTATORS.includes(token.fieldId) &&
               token?.options?.key && states.includes(token.options.key as any)
@@ -884,7 +903,7 @@ function componentIsReactive(component: Component) {
     }
     child.forEachChild(checkReactive);
   };
-  component.forEachChild(checkReactive);
+  checkReactive(component);
   return reactive;
 }
 
@@ -897,14 +916,14 @@ function getValue(value: any) {
 
 function getAlpineDataScript(component: Component): string {
   const publicStates: StoredStateWithId[] = (component.get('publicStates') || []);
-  if (!publicStates.length) return '';
+  console.log("data script public states:", publicStates, component, component.tagName)
   const dataObj: ESTree.ObjectExpression = {
     type: "ObjectExpression",
     properties: (publicStates).map((s): ESTree.Property => {
       return {
         type: "Property",
         key: toLiteral(s.id),
-        value: ensureFilteredData(toJsExpression(s.expression, withThis({ component })), s.expression as any),
+        value: ensureFilteredData(toJsExpression(s.expression, withThis({ component, transformers: { baseFieldId: p => getFieldId(component, p) } })), s.expression as any),
         method: false,
         shorthand: false,
         kind: "init",
@@ -912,6 +931,77 @@ function getAlpineDataScript(component: Component): string {
       }
     })
   }
+
+  if (component.defaults.script) {
+    // component.set('script', '');
+    dataObj.properties.push({
+      type: "Property",
+      kind: "init",
+      method: true,
+      shorthand: false,
+      computed: false,
+      key: {
+        type: "Identifier",
+        name: "$$init"
+      },
+      value: {
+        type: "FunctionExpression",
+        params: [
+          {
+            type: "Identifier",
+            name: "opts"
+          }
+        ],
+        body: {
+          type: "BlockStatement",
+
+          body: [
+            {
+              type: "ExpressionStatement",
+              expression: {
+                type: "CallExpression",
+                optional: false,
+                callee: {
+                  type: "MemberExpression",
+                  object: {
+                    type: "Identifier",
+                    name: '(' + component.defaults.script.toString() + ')',
+                  },
+                  property: {
+                    type: "Identifier",
+                    name: "call"
+                  },
+                  optional: false,
+                  computed: false
+                },
+                arguments: [
+                  {
+                    type: "MemberExpression",
+                    object: {
+                      type: "Identifier",
+                      name: "this"
+                    },
+                    property: {
+                      type: "Identifier",
+                      name: "$el"
+                    },
+                    computed: false,
+                    optional: false
+                  },
+                  {
+                    type: "Identifier",
+                    name: "opts"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+
+      }
+    })
+  }
+  if (!dataObj.properties.length) return '';
   const callExpr: ESTree.CallExpression = {
     type: "CallExpression",
     callee: {
@@ -930,7 +1020,7 @@ function getAlpineDataScript(component: Component): string {
     arguments: [
       {
         type: "Literal",
-        value: sanitizeId(component.getId())
+        value: sanitizeId(getOrCreatePersistantId(component))
       },
       {
         type: "FunctionExpression",
@@ -948,10 +1038,12 @@ function getAlpineDataScript(component: Component): string {
     ],
     optional: false
   }
-  return onAlpineInit(genJs(callExpr));
+  const ret = (genJs(callExpr));
+  console.log('data script', ret);
+  return ret;
 }
 function genJs(ast: ESTree.Expression, opts?: { minify: boolean }) {
-  console.log("input Js AST:", ast);
+  // console.log("input Js AST:", ast);
   opts ??= {
     minify: false
   };
@@ -961,7 +1053,7 @@ function genJs(ast: ESTree.Expression, opts?: { minify: boolean }) {
   }
   js = js.replace(/"/gi, "'");
   if (js.slice(-1) === ';') js = js.slice(0, -1);
-  console.log("output js:", js);
+  // console.log("output js:", js);
   return js;
 }
 function toLiteral(id: string): ESTree.Property["key"] {
@@ -1014,7 +1106,7 @@ const CHAIN_FILTERS = (
         })!,
         FILTERS[expr.id] ?
           FILTERS[expr.id].getArguments(expr as Token, opts) :
-          pojsoToAST(reifyProperties(expr.options))
+          pojsoToAST(reifyProperties(expr.options, opts))
       ],
       optional: true,
     }, true]
@@ -1029,7 +1121,7 @@ const STATE_SETTER = {
     const options: any = expr.options;
     const { key, value } = options;
     const valueExpr: Expression = JSON.parse(value);
-    console.log("Value expr:", valueExpr);
+    // console.log("Value expr:", valueExpr);
     const root = opts?.transformers?.root || (v => v);
 
     return {
@@ -1102,7 +1194,8 @@ type ToJsExpressionOpts = {
   transformers?: {
     root?: (v: ESTree.Expression) => ESTree.Expression
     chain?: (v: ESTree.Expression) => ESTree.Expression,
-    middleware?: (v: Token, c?: ESTree.Expression) => [ESTree.Expression, boolean]
+    middleware?: (v: Token, c?: ESTree.Expression) => [ESTree.Expression, boolean],
+    baseFieldId?: (v: Property) => string
   }
 };
 const VALUEOF_CHAINER: (v: ESTree.Expression) => ESTree.Expression = v => v;
@@ -1125,15 +1218,16 @@ const VALUEOF_CHAINER: (v: ESTree.Expression) => ESTree.Expression = v => v;
 //   })
 const ensureJs = v => v || { type: "Identifier", name: "undefined" }
 
-function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): ESTree.Expression {
+export function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): ESTree.Expression {
   if (!expression || !expression.length) return { type: "Identifier", name: "null" }
-  console.log("Input expression:", expression);
+  // console.log("Input expression:", expression);
   const first = expression[0];
   let lastChained;
-  let { root, chain: _chain, middleware } = opts?.transformers! || {};
+  let { root, chain: _chain, middleware, baseFieldId: baseFieldId } = opts?.transformers! || {};
   root ??= v => v;
   _chain ??= VALUEOF_CHAINER;
   middleware ??= CHAIN_FILTERS(root, opts);
+  baseFieldId ??= t => t.fieldId
   if (first.type === 'property' && first.dataSourceId === 'actions') {
     return {
       type: "CallExpression",
@@ -1166,16 +1260,25 @@ function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): EST
           type: "CallExpression",
           callee: {
             type: "MemberExpression",
-            object: root({
+            computed: false,
+            optional: false,
+            object: {
               type: "Identifier",
-              name: (e as any).dataSourceId
-            }),
-            property: {
-              type: "Literal",
-              value: e.fieldId
+              name: "$store"
             },
-            computed: true,
-            optional: true
+            property: {
+              type: "MemberExpression",
+              object: root({
+                type: "Identifier",
+                name: (e as any).dataSourceId
+              }),
+              property: {
+                type: "Literal",
+                value: e.fieldId
+              },
+              computed: true,
+              optional: true
+            },
           },
           arguments: [
             ACTIONS[e.fieldId].getArguments(e, opts)
@@ -1223,7 +1326,7 @@ function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): EST
             object: currentJs,
             property: {
               type: "Literal",
-              value: expr.fieldId
+              value: i !== 0 ? expr.fieldId : baseFieldId(expr)
             },
             computed: true,
             optional: true,
@@ -1234,7 +1337,7 @@ function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): EST
             currentJs = {
               type: "CallExpression",
               callee: currentJs,
-              arguments: [pojsoToAST(reifyProperties(expr.options))],
+              arguments: [{ type: "Literal", value: { $$empty: true } as any }],
               optional: true,
             }
           }
@@ -1298,7 +1401,7 @@ function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): EST
             ensureJs(currentJs),
             FILTERS[expr.id] ?
               FILTERS[expr.id].getArguments(expr as Token, opts) :
-              pojsoToAST(reifyProperties(expr.options))
+              pojsoToAST(reifyProperties(expr.options, opts))
           ],
           optional: true,
         }
@@ -1312,15 +1415,16 @@ function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): EST
     if (lastChained === currentJs) return currentJs;
     lastChained = currentJs = _chain!(currentJs!)
   }
-  console.log("output JS AST:", currentJs);
+  // console.log("output JS AST:", currentJs);
   return ensureJs(currentJs);
 }
 
 
 
-const withThis = (opts: any): ToJsExpressionOpts => ({
-  ...opts,
+const withThis = (opts: ToJsExpressionOpts): ToJsExpressionOpts => ({
+  ...(opts || {}),
   transformers: {
+    ...(opts?.transformers || {}),
     root(expr: ESTree.Expression): ESTree.Expression {
       return {
         type: "MemberExpression",
@@ -1338,17 +1442,26 @@ const withThis = (opts: any): ToJsExpressionOpts => ({
 function alpinify(
   component: Component,
   opts: {
-    statesObj: Record<Properties, RealState>;
-    tagName: string; dataTree: DataTree;
-    statesPrivate: { stateId: StateId; label: string; tokens: State[]; }[];
-    statesPublic: {
+    config?: ClientConfig,
+    statesObj?: Record<Properties, RealState>;
+    tagName?: string; dataTree?: DataTree;
+    statesPrivate?: { stateId: StateId; label: string; tokens: State[]; }[];
+    statesPublic?: {
       stateId: StateId; label: string; tokens: State[];
 
     }[];
-    originalAttributes: Record<string, string>;
-    attributeStates: { stateId: string; label: string; value: string; }[];
+    originalAttributes?: Record<string, string>;
   }) {
+  if (!opts.statesObj || !opts.statesPrivate || !opts.statesPublic) {
+    if (!opts.config) throw new Error("Config or states required.");
+    const states = getStatesObj(opts.config, component);
+    Object.assign(opts, states);
+  }
+  if (!opts.originalAttributes) {
+    opts.originalAttributes = component.get('attributes') as Record<string, string>
 
+  }
+  component.forEachChild(child => child && alpinify(child, { ...opts, statesObj: undefined, statesPrivate: undefined, statesPublic: undefined, originalAttributes: undefined }));
   const events: (Backbone.Model<{}> | {
     id: string,
     name: string,
@@ -1358,12 +1471,14 @@ function alpinify(
       name: string
     }[]
   })[] = component.get('events');
-  const hasData = Object.values(opts.statesPublic).length;
+  const hasData = component.get('publicStates')?.length;
+  const fieldId = (prop: Property) => getFieldId(component, prop);
+  console.log("alpinify:", opts);
   const boundAttributes = getBoundAttributes(component, opts);
   const attrs: any = {
     ...opts.originalAttributes,
     ...(boundAttributes),
-    'x-data': !hasData ? true : sanitizeId(component.getId()),
+    'x-data': !hasData ? true : sanitizeId(getOrCreatePersistantId(component)),
     'x-html': maybeAwaitJs(genJs(
       ensureFilteredData(
         toJsExpression(
@@ -1371,19 +1486,20 @@ function alpinify(
           {
             component,
             transformers: {
-              middleware: CHAIN_FILTERS(undefined, { component })
+              middleware: CHAIN_FILTERS(undefined, { component }),
+              baseFieldId: fieldId,
             }
           }
-        ), opts?.statesObj?.innerHTML?.tokens), { minify: true })),
+        ), opts?.statesObj?.innerHTML?.tokens!), { minify: true })),
     ...(Object.fromEntries(
       (events || [])
         .map((e: any) => e.toJSON instanceof Function ? e.toJSON() : e)
         .filter(e => e.expression)
         .map(e => {
-          console.log("Event:", e);
+          // console.log("Event:", e);
           return ([
             'x-on:' + [e.name, ...(e.modifiers ? e.modifiers.map(m => m.name) : [])].join('.'),
-            genJs(toJsExpression(JSON.parse(e.expression), { component }), { minify: true })
+            genJs(toJsExpression(JSON.parse(e.expression), { component, transformers: { baseFieldId: fieldId } }), { minify: true })
           ])
         })
     )),
@@ -1391,13 +1507,17 @@ function alpinify(
   if (!attrs['x-html'] || attrs['x-html'] === 'null') {
     delete attrs['x-html']
   }
+  if (hasReactiveProps(component) || component.defaults.script) {
+    if (typeof attrs['x-data'] !== 'string' || attrs['x-data'].length === 0) attrs['x-data'] = sanitizeId(getOrCreatePersistantId(component));
+    attrs["x-init"] = `$$init(${getInitializerOpts(component).replace(/"/gi, "'")})`;
+  }
   component.removeAttributes(Object.keys(component.getAttributes()));
   component.addAttributes(attrs);
   return component;
 }
 
 function toJsCondition(component: Component, condition: { expression: Token[]; expression2?: Token[]; operator: UnariOperator | BinariOperator; }): ESTree.Expression {
-  const exprs = [condition.expression, condition.expression2].filter(Boolean).map(e => toJsExpression(e!));
+  const exprs = [condition.expression, condition.expression2].filter(Boolean).map(e => toJsExpression(e!, { transformers: { baseFieldId: p => getFieldId(component, p) } }));
   switch (condition.operator) {
     case UnariOperator.NOT_EMPTY_ARR:
     case UnariOperator.EMPTY_ARR:
@@ -1449,22 +1569,26 @@ function sanitizeId(arg0: string): string {
 function getBoundAttributes(component: Component, opts: Parameters<typeof alpinify>["1"]) {
   return Object.fromEntries(
     opts
-      .statesPrivate
+      .statesPrivate!
       .filter(({ label }) => isAttribute(label))
       .map(
-        s => [
-          ':' + s.label,
-          maybeAwaitJs(genJs(ensureFilteredData(
+        s => {
+          const expr = genJs(ensureFilteredData(
             toJsExpression(
               s.tokens,
               {
                 component,
                 transformers: {
-                  middleware: CHAIN_FILTERS(undefined, { component })
+                  middleware: CHAIN_FILTERS(undefined, { component }),
+                  baseFieldId: t => getFieldId(component, t)
                 }
               }
-            ), s.tokens), { minify: true }))
-        ])
+            ), s.tokens), { minify: true });
+          return [
+            (s.label.indexOf('x-') === 0 ? '' : ':') + s.label,
+            s.label === 'x-model' ? expr : maybeAwaitJs(expr)
+          ]
+        })
   )
 }
 
@@ -1473,7 +1597,7 @@ function getBoundAttributes(component: Component, opts: Parameters<typeof alpini
 
 
 function pojsoToAST(options: Options): ESTree.ObjectExpression {
-  return {
+  return/*  (({ type: "Literal", value: options as any } as ESTree.Literal) as any) || */ {
     type: "ObjectExpression",
     properties: Object.entries(options).map((e: any[]): ESTree.Property => ({
       type: "Property",
@@ -1493,29 +1617,21 @@ function pojsoToAST(options: Options): ESTree.ObjectExpression {
   }
 }
 
-function reifyProperties(options: any): Options {
-  return Object.fromEntries(
-    Object.entries(options)
-      .map(e => [e[0], toJsExpression(tryParse(e[1] as any))])
-  )
-}
-
-function unwrapValue(options: any): Options {
-
-  return reifyProperties(options);
-}
-
-function tryParse(arg0: string): any {
-  try {
-    return (arg0 as string).trim().charAt(0) === '[' ? JSON.parse(arg0) : arg0
-  } catch (e) {
-    return arg0;
+function reifyProperties(options: any, genOpts: ToJsExpressionOpts | undefined): Options {
+  let entries =
+    (parseEntries(options) as any)
+      // .filter((e: [string, Expression]) => !isFixed(e[1][0] as any) &&  !isState(e[1][0] as any) &&  !isHttp(e[1][0] as any))
+  if (!entries.length) {
+    return {
+      $$empty: true
+    }
   }
+  return Object.fromEntries(entries.map(e => [e[0], toJsExpression(e[1], genOpts)]))
 }
 
 
 
-function ensureFilteredData(arg0: ESTree.Expression, tokens: Token[], forceEnsure:boolean = false): ESTree.Expression {
+function ensureFilteredData(arg0: ESTree.Expression, tokens: Token[], forceEnsure: boolean = false): ESTree.Expression {
   if (!tokens || !tokens.length) return arg0;
   let ensure = forceEnsure || tokens?.[0]?.type === 'property' && Boolean(tokens[0].dataSourceId);
   // ensure = ensure || tokens?.[0]?.type === 'state';
@@ -1572,132 +1688,134 @@ function maybeAwaitJs(arg0: string) {
 
 function getAlpineStoreScript(component: Component, config: ClientConfig): string {
   const exprs: (Token & { index: number })[] = getAllExpressions(component);
-  console.log("all expressions:", exprs);
+  // console.log("all expressions:", exprs);
   const dsRefs: Property[] = exprs.filter((expr) => isDataSourceField(expr as any) && expr?.type === 'property' && expr?.dataSourceId) as any[];
-
-  console.log("Data source refs...", dsRefs);
+  const fieldId = p => getFieldId(component, p);
+  // console.log("Data source refs...", dsRefs);
   const dsRefsGrouped = dsRefs
-  .filter(dsRef => {
-    const doc = getOpenApiDoc(dsRef, config);
-    return Boolean(doc.fieldMappings[dsRef.fieldId])
-  })
-  .reduce((obj, ref) => {
-    obj[ref.dataSourceId!] ??= [];
-    if (!obj[ref.dataSourceId!].find(r => r.fieldId === ref.fieldId)) {
-      obj[ref.dataSourceId!].push(ref);
-    }
-    return obj;
-  }, {} as Record<string, Property[]>)
+    .filter(dsRef => {
+      const doc = getOpenApiDoc(dsRef, config);
+      return Boolean(doc.fieldMappings[dsRef.fieldId])
+    })
+    .reduce((obj, ref) => {
+      obj[ref.dataSourceId!] ??= [] as any;
+      const refFieldId = getFieldId(component, ref);
+      if (!obj[ref.dataSourceId!].find(r => r.variant === refFieldId)) {
+        obj[ref.dataSourceId!].push({ ...ref, variant: refFieldId });
+      }
+      return obj;
+    }, {} as Record<string, (Property & { variant: string })[]>)
   let js = '';
   Object.entries(dsRefsGrouped).forEach(([dataSourceId, dsRefs]) => {
     const dataObj: ESTree.ObjectExpression = {
       type: "ObjectExpression",
-      properties: dsRefs.map(dsRef => ({
-        type: "Property",
-        key: {
-          type: "Literal",
-          value: dsRef.fieldId
-        },
-        value: {
-          type: "CallExpression",
-          callee: {
-            type: "Identifier",
-            name: "reloadable"
+      properties: dsRefs.map(dsRef => {
+        return ({
+          type: "Property",
+          key: {
+            type: "Literal",
+            value: dsRef.variant
           },
-          arguments: [
-            {
-              type: "MemberExpression",
-              object: {
+          value: {
+            type: "CallExpression",
+            callee: {
+              type: "Identifier",
+              name: "reloadable"
+            },
+            arguments: [
+              {
                 type: "MemberExpression",
                 object: {
-                  type: "Identifier",
-                  name: "$pagedata"
-                },
-                property: {
-                  type: "Literal",
-                  value: dsRef.dataSourceId!
-                },
-                computed: true,
-                optional: true,
-              },
-              property: {
-                type: "Literal",
-                value: dsRef.fieldId
-              },
-              computed: true,
-              optional: true
-            },
-            {
-              type: "ArrowFunctionExpression",
-              params: [
-                {
-                  type: "Identifier",
-                  name: "opts"
-                }
-              ],
-              expression: true,
-              body: {
-                type: "CallExpression",
-                callee: {
                   type: "MemberExpression",
                   object: {
                     type: "Identifier",
-                    name: "this"
+                    name: "$pagedata"
                   },
-                  optional: true,
-                  computed: false,
                   property: {
-                    type: "MemberExpression",
-                    object: {
-                      type: "Identifier",
-                      name: "$store"
-                    },
-                    property: {
-                      type: "Identifier",
-                      name: "fetch"
-                    },
-                    optional: false,
-                    computed: false
-                  }
+                    type: "Literal",
+                    value: dsRef.dataSourceId!
+                  },
+                  computed: true,
+                  optional: true,
                 },
-                arguments: [
+                property: {
+                  type: "Literal",
+                  value: dsRef.variant
+                },
+                computed: true,
+                optional: true
+              },
+              {
+                type: "ArrowFunctionExpression",
+                params: [
                   {
                     type: "Identifier",
                     name: "opts"
-                  },
-                  {
-                    type: "ObjectExpression",
-                    properties: [
-                      {
-                        type: "Property",
-                        key: {
-                          type: "Literal",
-                          value: "method"
-                        },
-                        value: {
-                          type: "Literal",
-                          value: getHttpMethod(dsRef, config)
-                        },
-                        kind: "init",
-                        method: false,
-                        shorthand: false,
-                        computed: false
-                      }
-                    ]
                   }
                 ],
-                optional: false,
+                expression: true,
+                body: {
+                  type: "CallExpression",
+                  callee: {
+                    type: "MemberExpression",
+                    object: {
+                      type: "Identifier",
+                      name: "this"
+                    },
+                    optional: true,
+                    computed: false,
+                    property: {
+                      type: "MemberExpression",
+                      object: {
+                        type: "Identifier",
+                        name: "$store"
+                      },
+                      property: {
+                        type: "Identifier",
+                        name: "fetch"
+                      },
+                      optional: false,
+                      computed: false
+                    }
+                  },
+                  arguments: [
+                    {
+                      type: "Identifier",
+                      name: "opts"
+                    },
+                    {
+                      type: "ObjectExpression",
+                      properties: [
+                        {
+                          type: "Property",
+                          key: {
+                            type: "Literal",
+                            value: "method"
+                          },
+                          value: {
+                            type: "Literal",
+                            value: getHttpMethod(dsRef as Property, config)
+                          },
+                          kind: "init",
+                          method: false,
+                          shorthand: false,
+                          computed: false
+                        }
+                      ]
+                    }
+                  ],
+                  optional: false,
+                }
               }
-            }
-          ],
-          optional: false,
-        },
-        kind: "init",
-        computed: false,
-        shorthand: false,
-        method: false
-      }
-      )),
+            ],
+            optional: false,
+          },
+          kind: "init",
+          computed: false,
+          shorthand: false,
+          method: false
+        } as unknown as ESTree.ObjectExpression['properties']["0"])
+      }),
     };
     const storeStmt: ESTree.CallExpression = {
       type: "CallExpression",
@@ -1727,21 +1845,24 @@ function getAlpineStoreScript(component: Component, config: ClientConfig): strin
   });
   return js;
 }
-function onAlpineInit(js:string) {
+function onAlpineInit(js: string) {
   return `document.addEventListener('alpine:init', () => {\n${js}\n})`;
 }
-
+function getExpr(e) {
+  return typeof e.get === 'function' ? (e.get('expression') || e.expression) : e.expression;
+}
 function getAllExpressions(component: Component): (Token & { index: number })[] {
   const childExprs = [] as any;
   component.forEachChild(component => {
     childExprs.push(...getAllExpressions(component));
   })
+
   const events = component.get('events') || [];
-  console.log("Events:", events);
+  // console.log("Events:", events);
   const eventExpressions = events
     ?.flatMap?.(
-      e => e?.expression ?
-        JSON.parse(e.expression)
+      e => getExpr(e) ?
+        JSON.parse(getExpr(e))
           ?.flatMap(
             e => Object.values(e.options)
               .map((v: any) => tryParse('' + v))
@@ -1749,12 +1870,14 @@ function getAllExpressions(component: Component): (Token & { index: number })[] 
               .flatMap(v => v)
               ?.map?.((v, i) => ({ ...v, index: i })
               )) : []);
-  console.log("event expressions:", eventExpressions);
+  const props = component.get('props') || [];
+  const propsExpressions = props.map(p => JSON.parse(getExpr(p)))
+  // console.log("event expressions:", eventExpressions);
   const exprs = ((component.get('publicStates') || [])
-    ?.flatMap?.(e => e?.expression?.map?.((v, i) => ({ ...v, index: i }))))
+    ?.flatMap?.(e => getExpr(e)?.map?.((v, i) => ({ ...v, index: i }))))
     .concat(
       ((component.get('privateStates') || [])
-        ?.flatMap?.(e => e?.expression?.map?.((v, i) => ({ ...v, index: i }))))
+        ?.flatMap?.(e => getExpr(e)?.map?.((v, i) => ({ ...v, index: i }))))
     )
     /**
      * @todo fuck me make this recursive...
@@ -1762,9 +1885,12 @@ function getAllExpressions(component: Component): (Token & { index: number })[] 
     .concat(
       eventExpressions
     )
+    .concat(
+      propsExpressions
+    )
 
   const ret = exprs.concat(childExprs)
-  console.log("exprs:", ret);
+  // console.log("exprs:", ret);
   return ret;
 
 
@@ -1776,14 +1902,14 @@ function isDataSource(dataSourceId: import("@silexlabs/grapesjs-data-source").Da
 }
 
 function getHttpMethod(dsRef: Property, config: ClientConfig): string {
-  const doc = getOpenApiDoc(dsRef, config); 
-  console.log("doc:", doc);
+  const doc = getOpenApiDoc(dsRef, config);
+  // console.log("doc:", doc);
   const mappings = doc?.fieldMappings;
-  console.log('mappings:', mappings);
+  // console.log('mappings:', mappings);
   const mapping = mappings?.[dsRef.fieldId];
-  console.log('mapping:', mapping);
+  // console.log('mapping:', mapping);
   const method = mapping?.method;
-  console.log('method', method);
+  // console.log('method', method);
   return method;
   /**
    * @todo handle openapi field mappings....
@@ -1801,7 +1927,7 @@ function isDataSourceField(expr: Property & { index: number; }) {
   if (!expr.dataSourceId || !isDataSource(expr.dataSourceId)) return;
   if (!expr.fieldId) return;
   // const ret = METHODS.includes(expr.fieldId.split(' ')[0])
-  // console.log("data source?", expr, expr.fieldId);
+  console.log("data source?", expr, expr.fieldId);
   return true;
 }
 
@@ -1813,7 +1939,7 @@ function getBoilerplateScript(component: Component, config: ClientConfig): strin
       "${e[0]}": ${e[1].toString().trim()}`)}
   })`
   const filterFns = getFilters(null as any);
-  console.log("filter fns:", filterFns.map(f => [f.id, f.apply.toString().trim()]))
+  // console.log("filter fns:", filterFns.map(f => [f.id, f.apply.toString().trim()]))
   const filters =
     `Alpine.store('filters', {
       ${filterFns.map(fn =>
@@ -1822,9 +1948,11 @@ function getBoilerplateScript(component: Component, config: ClientConfig): strin
     )}
     })`
   const dataStores = getAlpineStoreScript(component, config);
-  const scripts = [STORE_JS, actions, filters, dataStores];
+  const dataMethods = getAlpineDataScripts(component, config);
+  const scripts = [STORE_JS, actions, filters, dataStores, dataMethods];
   const ret = scripts.join('\n');
   console.log("boilerplate", ret);
+  console.log("boilerplates", scripts);
   return onAlpineInit(ret);
 }
 
@@ -1834,6 +1962,127 @@ function getOpenApiDoc(dsRef: Property, config: ClientConfig) {
   const src: any = mgr.get(dsRef.dataSourceId!);
   const doc = src.get('doc');
   return doc;
+}
+function getStatesObj(config: ClientConfig, component: Component) {
+  const editor = config.getEditor() as unknown as DataSourceEditor
+
+  const dataTree = editor.DataSourceManager.getDataTree()
+  const componentId = sanitizeId(getOrCreatePersistantId(component));
+  const statesPrivate = withNotification(() => getRealStates(dataTree, getStateIds(component, false)
+    .map(stateId => ({
+      stateId,
+      state: getState(component, stateId, false)!,
+    }))), editor, componentId)
+
+  const statesPublic = withNotification(() => getRealStates(dataTree, getStateIds(component, true)
+    .map(stateId => ({
+      stateId,
+      state: getState(component, stateId, true)!,
+    }))), editor, componentId)
+  const statesObj = statesPrivate
+    // Filter out attributes, keep only properties
+    .filter(({ label }) => !isAttribute(label))
+    // Add states
+    .concat(statesPublic)
+    .reduce((final, { stateId, label, tokens }) => ({
+      ...final,
+      [stateId]: {
+        stateId,
+        label,
+        tokens,
+      },
+    }), {} as Record<Properties, RealState>)
+  return { statesObj, statesPrivate, statesPublic };
+}
+
+function getAlpineDataScripts(component: Component, config?: ClientConfig) {
+  let script = '';
+  function recurse(component: Component) {
+    component.forEachChild(recurse);
+    const reactive = componentIsReactive(component);
+    if (reactive) {
+      const dataScript = getAlpineDataScript(component);
+      if (!dataScript) return;
+      script += '\n' + dataScript
+    }
+  }
+  recurse(component);
+  console.log("data scripts...", script);
+  return script;
+}
+function getInitializerOpts(component: Component) {
+  if (!component.defaults.script || !component.defaults['script-props']) return '';
+  const reactiveProps = getReactiveProps(component);
+  if (reactiveProps) {
+    const staticProps = getStaticProps(component);
+    const expr: ESTree.ObjectExpression = {
+      type: "ObjectExpression",
+      properties: [{
+        type: "SpreadElement",
+        argument: {
+          type: "Literal",
+          value: staticProps as any
+        }
+      }].concat(reactiveProps as any) as ESTree.ObjectExpression["properties"]
+    }
+    const opts = AST.generate(expr);
+    return opts;
+  }
+  return '';
+}
+// function getInitializerStore(component: Component, config: ClientConfig) {
+//   let script = '';
+//   function recurse(component: Component) {
+//     component.forEachChild(recurse);
+//     if (!component.defaults.script || !component.defaults['script-props']) return;
+//     const reactiveProps = hasReactiveProps(component);
+//     if (reactiveProps) {
+
+//     }
+//   }
+//   recurse(component);
+// }
+
+function getReactiveProps(component: Component): ESTree.ObjectExpression["properties"] {
+  const _props: Array<Backbone.Model<{ id: string, name: string, expression: string }>> = component.get('props');
+  return _props.map(p => {
+    const expr = JSON.parse(getExpr(p)) as Expression;
+    return {
+      type: "Property",
+      kind: "init",
+      method: false,
+      computed: false,
+      shorthand: false,
+      key: {
+        type: "Identifier",
+        name: (p as any).name || p.get('name')!,
+      },
+      value: {
+        type: "AwaitExpression",
+        argument: ensureFilteredData(toJsExpression(expr, { transformers: { baseFieldId: p => getFieldId(component, p) } }), expr as any)
+      }
+    }
+  })
+}
+
+function getStaticProps(component: Component) {
+  const scriptProps = component.defaults["script-props"];
+  const r = {};
+  for (const prop of scriptProps) {
+    r[prop] = component.get(prop);
+  }
+  return r;
+}
+
+function hasReactiveProps(component: Component): boolean {
+  return component.get('props')?.find?.(p => getExpr(p) && getExpr(p) !== '[]');
+}
+function hasReactiveAttributes(component: Component): boolean {
+  return component.get('privateStates')?.find?.(s => s?.label?.indexOf?.('x-') === 0);
+}
+
+function hasAlpineData(component: Component): boolean {
+  return component.defaults.script || component.get('publicStates')?.length;
 }
 //function transformFile(file: ClientSideFile/*, options: EleventyPluginOptions*/): ClientSideFile {
 //  //const fileWithContent = file as ClientSideFileWithContent

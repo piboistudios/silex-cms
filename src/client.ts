@@ -12,7 +12,11 @@ import merge from 'deepmerge'
 import { WebsiteSettings } from '@silexlabs/silex/src/ts/types'
 import blocks from './client/blocks'
 import traits from './client/traits'
+import { toJsExpression } from './client/publication'
 
+export const utils = {
+  toJsExpression
+};
 export interface EleventyPluginOptions extends DataSourceEditorOptions {
   // Enable the publication to 11ty version > 2
   // Default: true

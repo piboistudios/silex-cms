@@ -1,5 +1,8 @@
 import StaticPlugin from '@silexlabs/silex/dist/plugins/server/plugins/server/StaticPlugin'
-
+import { toJsExpression } from './client/publication'
+export const utils = {
+  toJsExpression
+};
 export default (config) => {
   config.addPlugin(StaticPlugin, {
     routes: [
