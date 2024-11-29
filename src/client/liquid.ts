@@ -16,7 +16,57 @@ export interface UnaryCondition {
 }
 
 export type Condition = BinaryCondition | UnaryCondition
+const EXPRESSION_HANDLERS = {
+  inline: {
+    "http": {
+      "get_session"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `session.${token.options.key}`
+      },
+      "get_body"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `body.${token.options.key}`
+      },
+      "get_query"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `query.${token.options.key}`
+      },
+      "get_cookie"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `cookies.${token.options.key}`
+      },
+      "get_local"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `locals.${token.options.key}`
+      }
+    }
+  },
+  block: {
+    "http": {
+      "get_session"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `{{session.${token.options.key}}}`
+      },
+      "get_body"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `{{body.${token.options.key}}}`
+      },
+      "get_query"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `{{query.${token.options.key}}}`
+      },
+      "get_cookie"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `{{cookies.${token.options.key}}}`
+      },
+      "get_local"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `{{locals.${token.options.key}}}`
+      }
+    },
 
+  }
+}
 /**
  * Generate liquid instructions which echo the value of an expression
  */
@@ -24,6 +74,13 @@ export function echoBlock(component: Component, expression: Expression): string 
   if (expression.length === 0) throw new Error('Expression is empty')
   if (expression.length === 1 && expression[0].type === 'property' && expression[0].fieldId === FIXED_TOKEN_ID) {
     return expression[0].options?.value as string ?? ''
+  }
+  const firstTok = expression[0];
+  if (
+    firstTok.type === 'property' &&
+    EXPRESSION_HANDLERS.block[firstTok.dataSourceId!][firstTok.fieldId]
+  ) {
+    return EXPRESSION_HANDLERS.block[firstTok.dataSourceId!][firstTok.fieldId](component, firstTok);
   }
   const statements = getLiquidBlock(component, expression)
   return `{% liquid
@@ -42,6 +99,13 @@ export function echoBlock1line(component: Component, expression: Expression): st
   if (expression.length === 0) throw new Error('Expression is empty')
   if (expression.length === 1 && expression[0].type === 'property' && expression[0].fieldId === FIXED_TOKEN_ID) {
     return expression[0].options?.value as string ?? ''
+  }
+  const firstTok = expression[0];
+  if (
+    firstTok.type === 'property' &&
+    EXPRESSION_HANDLERS.block[firstTok.dataSourceId!][firstTok.fieldId]
+  ) {
+    return EXPRESSION_HANDLERS.block[firstTok.dataSourceId!][firstTok.fieldId](component, firstTok);
   }
   const statements = getLiquidBlock(component, expression)
   return `{% ${statements
@@ -174,6 +238,19 @@ export function getPaginationData(component: Component, expression: Property[]):
  * Convert an expression to liquid code
  */
 export function getLiquidBlock(component: Component, expression: Expression): { variableName: string, liquid: string }[] {
+  const token = expression[0];
+  if (
+    token.type === 'property' &&
+    EXPRESSION_HANDLERS.block?.[token?.dataSourceId!]?.[token?.fieldId]
+  ) {
+    const ref = EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);;
+    return [
+      {
+        variableName: ref,
+        liquid: ref
+      }
+    ]
+  }
   if (expression.length === 0) return []
   expression = expression.slice();
   const result = [] as { variableName: string, liquid: string }[]
@@ -185,19 +262,14 @@ export function getLiquidBlock(component: Component, expression: Expression): { 
     const dsPropRef = `${firstToken.dataSourceId}.${getFieldId(component, firstToken)}`;
     const tempName = snakecase(dsPropRef + '_' + numNextVar++);
     const substitutionPairs: string = getSubstitutionOptions(component, firstToken);
-    const filters:Filter[] = [];
-    for (const tok of expression.slice(1)) {
-      if (tok.type !== 'filter') break;
-      else filters.push(tok as Filter);
-    }
+
     result.push({
       variableName: tempName,
-      liquid: `assign ${tempName} = ${dsPropRef} | call_with_opts: ${optVarName}${substitutionPairs ? ', ' + substitutionPairs : ''} ${
-        getLiquidStatementFilters(component, filters)
-      }`
+      liquid: `assign ${tempName} = ${dsPropRef} | call_with_opts: ${optVarName}${substitutionPairs ? ', ' + substitutionPairs : ''}`
     });
     lastVariableName = tempName;
-    expression.splice(filters.length);
+    // expression.splice(filters.length);
+    expression.splice(0, 1);
   }
   const rest = [...expression]
   while (rest.length) {
@@ -255,6 +327,12 @@ export function getLiquidStatement(component: Component, expression: Expression,
 
 export function getLiquidStatementProperties(component: Component, properties: (Property | State)[]): string {
   return properties.map((token, index) => {
+    if (
+      token.type === 'property' &&
+      EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId]
+    ) {
+      return EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);
+    }
     switch (token.type) {
       case 'state': {
         if (index !== 0) throw new Error('State can only be the first token in an expression')
@@ -312,6 +390,12 @@ function handleFilterOption(component: Component, filter: Filter, key: string, v
     const expression = toExpression(value)
     if (expression) {
       const result = expression.map((token, idx) => {
+        if (
+          token.type === 'property' &&
+          EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId]
+        ) {
+          return EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);
+        }
         switch (token.type) {
           case 'property': {
             if (token.fieldId === FIXED_TOKEN_ID) {
@@ -358,7 +442,7 @@ export function getFieldId(component: Component, token: Property): any {
   return fieldIds[token.dataSourceId!][token.fieldId][key].fieldId;
 }
 function getOptId(component, token) {
-  return token.dataSourceId +'.'+ getFieldId(component, token) + '__opts';
+  return token.dataSourceId + '.' + getFieldId(component, token) + '__opts';
 }
 function getWrapperComponent(component: Component): Component | undefined {
   return component.frame?.getComponent?.();
@@ -374,7 +458,7 @@ function getWrapperComponent(component: Component): Component | undefined {
  * @param component 
  * @param firstToken 
  */
-function getSubstitutionOptions(component: Component, firstToken: StoredProperty): string {
+export function getSubstitutionOptions(component: Component, firstToken: StoredProperty): string {
   if (!firstToken.options) return '';
   const opts = firstToken.options;
   const parsed = parseEntries(opts);
@@ -384,4 +468,5 @@ function getSubstitutionOptions(component: Component, firstToken: StoredProperty
   );
   return serverSideFields.map(e => `"${e[0]}", ${getLiquidStatementProperties(component, e[1] as any)}`).join(', ')
 }
+
 

@@ -8,6 +8,10 @@
 const FILTERS = Symbol('filters');
 const FETCH = Symbol('fetch');
 
+obj = {
+    "#foo": { foo: 'bar' },
+    baz: 'quz'
+}
 function box(primitive) {
     return new Proxy({ value: primitive }, {
         get(target, prop, receiver) {
@@ -69,7 +73,7 @@ Object.prototype.withFilter = function (filter, options) {
         const raw = target;
         target = new Proxy(target, {
             get(_target, prop) {
-                 if (prop === 'valueOf') return () => raw?.valueOf?.();
+                if (prop === 'valueOf') return () => raw?.valueOf?.();
 
                 if (PROMISE_FNS.concat([FILTERS]).includes(prop)) return typeof _target[prop] !== 'function' ?
                     _target[prop] : _target[prop].bind(_target);
@@ -104,7 +108,7 @@ const DEFAULT_FILTER = ($key = '$$opts') => (v, opts) => {
     const raw = v?.valueOf?.();
     if (raw instanceof Array) return !Object.values(opts).length ? raw : raw.find(i => {
         for (const key in opts) {
-            if(!i[$key]) return false;
+            if (!i[$key]) return false;
             if (typeof opts[key] === 'function') continue;
             if (!(key in i[$key]) || opts[key] !== i?.[$key]?.[key]) {
                 return false;
@@ -252,25 +256,25 @@ function promisetest() {
     console.log("ensured (should be promise)", JSON.stringify(ensured), f?.$$empty?.valueOf?.());
     f = reloadable({
         $$empty: false, foo: 'bar2', baz: [
-            { $$opts: { waldo: 1, w: 1 }, $$value: {quz: 'qux2::waldo'} },
-            { $$opts: { graply: 1, w: 2 }, $$value: {quz: 'qux2::graply'} },
+            { $$opts: { waldo: 1, w: 1 }, $$value: { quz: 'qux2::waldo' } },
+            { $$opts: { graply: 1, w: 2 }, $$value: { quz: 'qux2::graply' } },
         ]
     }, (opts) => Promise.resolve({ foo: 'bar3new', baz: { quz: 'qux3new' }, opts }));
     setTimeout(() => {
         /**
          * @todo oh right... make withFilter not alter object in place...
          */
-        console.log("test 1...", f.baz({  w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
+        console.log("test 1...", f.baz({ w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
         console.log("test 2...", f.baz({ w: 1 }).withFilter(v => ({ ...v, quz: v.quz + 'whoafilter1::' })).quz.withFilter(v => v + '_filteredagain').$ENSURE().filtered());
-        console.log("test 1...", f.baz({  w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
+        console.log("test 1...", f.baz({ w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
         console.log("test 2...", f.baz({ w: 1 }).withFilter(v => ({ ...v, quz: v.quz + 'whoafilter1::' })).quz.withFilter(v => v + '_filteredagain').$ENSURE().filtered());
-        console.log("test 1...", f.baz({  w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
+        console.log("test 1...", f.baz({ w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
         console.log("test 2...", f.baz({ w: 1 }).withFilter(v => ({ ...v, quz: v.quz + 'whoafilter1::' })).quz.withFilter(v => v + '_filteredagain').$ENSURE().filtered());
-        console.log("test 1...", f.baz({  w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
+        console.log("test 1...", f.baz({ w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
         console.log("test 2...", f.baz({ w: 1 }).withFilter(v => ({ ...v, quz: v.quz + 'whoafilter1::' })).quz.withFilter(v => v + '_filteredagain').$ENSURE().filtered());
-        console.log("test 1...", f.baz({  w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
+        console.log("test 1...", f.baz({ w: 1 })?.$ENSURE?.()?.filtered?.()?.valueOf?.());
         console.log("test 2...", f.baz({ w: 1 }).withFilter(v => ({ ...v, quz: v.quz + 'whoafilter1::' })).quz.withFilter(v => v + '_filteredagain').$ENSURE().$ENSURE().filtered().$ENSURE().filtered().slice());
-        console.log('wat', f.baz({ waldo: 1}).withFilter(v => v).quz.$ENSURE().filtered().valueOf())
+        console.log('wat', f.baz({ waldo: 1 }).withFilter(v => v).quz.$ENSURE().filtered().valueOf())
     }, 1)
 
 }

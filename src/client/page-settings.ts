@@ -8,8 +8,8 @@ import { Page } from 'grapesjs'
 /**
  * Main function to add the settings to the page
  */
-export default function(config: ClientConfig, opts: EleventyPluginOptions): void {
-  if(!opts.enable11ty) return // Do not add the settings if 11ty is disabled
+export default function (config: ClientConfig, opts: EleventyPluginOptions): void {
+  if (!opts.enable11ty) return // Do not add the settings if 11ty is disabled
   config.on('silex:startup:end', () => {
     const editor = config.getEditor() as unknown as DataSourceEditor
     editor.on(/* ClientEvent.SETT(INGS_SAVE_START */'silex:settings:save:start', (page: Page) => updateBodyStates(editor, page))
@@ -28,7 +28,7 @@ export default function(config: ClientConfig, opts: EleventyPluginOptions): void
 function stateOnBody(editor, value, name, body) {
   if (value) {
     const expression = toExpression(value)
-    if(expression) {
+    if (expression) {
       setState(body, name, {
         label: name,
         hidden: true,
@@ -82,16 +82,17 @@ function updateBodyStates(editor: DataSourceEditor, page: Page) {
  * Render the settings form
  */
 function render(settings: Silex11tyPluginWebsiteSettings, config: ClientConfig, page: Page): TemplateResult {
+  settings.method ??= 'get';
   setTimeout(() => {
     // Update the settings form when the selection changed without recreating the form
     (document.querySelectorAll('#settings-cms input') as NodeListOf<HTMLInputElement>)
       .forEach((input: HTMLInputElement) => {
         switch (input.type) {
-        case 'checkbox':
-          input.checked = !!settings[input.name]
-          break
-        default:
-          input.value = settings[input.name] ?? ''
+          case 'checkbox':
+            input.checked = !!settings[input.name]
+            break
+          default:
+            input.value = settings[input.name] ?? ''
         }
       })
   })
@@ -114,6 +115,10 @@ function render(settings: Silex11tyPluginWebsiteSettings, config: ClientConfig, 
         The "Silex CMS" feature integrates <a target="_blank" href="https://www.11ty.dev/">11ty</a> static site generator and your favorite headless CMS with Silex.
         <br>Read the <a target="_blank" href="https://docs.silex.me/en/user/cms">documentation</a> to learn more.
       </div>
+      <select name="method">
+        <option value="get" .selected=${settings.method === 'get'}>GET</option>
+        <option value="post" .selected=${settings.method === 'post'}>POST</option>
+      </select>
       <div class="silex-form__group col2">
         <label class="silex-form__element">
           <h3>Create pages from data</h3>
@@ -125,8 +130,8 @@ function render(settings: Silex11tyPluginWebsiteSettings, config: ClientConfig, 
             .editor=${config.getEditor()}
             .selected=${body}
             @change=${() => {
-    showWarningDirty()
-  }}
+      showWarningDirty()
+    }}
             no-states
             no-filters
           >

@@ -1,11 +1,26 @@
 export default `
-window.$pagedata = {}
-if (window && window?.pagedata) {
-    try {
-        window.$pagedata = JSON.parse(window.pagedata.textContent);
-    } catch (e) {
-        console.error('Failed to parse pagedata:', e);
+const _fetch = window.fetch.bind(window);
+let _csrf;
+function getCsrf() {
+ if(_csrf) return _csrf;
+ const scriptTag = document.querySelector('script#__csrf[type="text/plain"]');
+ if (scriptTag) {
+    _csrf = scriptTag.textContent;
+ }
+return _csrf;
+}
+Alpine.store('csrf', getCsrf)
+window.fetch = function(resource, opts) {
+    if (opts) {
+        if (resource.charAt(0) === '/' || resource.startsWith(location.origin)) {
+            const csrf = getCsrf();
+            if(csrf) {
+                opts.headers ??= {};
+                opts.headers['x-csrf'] = getCsrf();
+            }
+        }
     }
+    return _fetch(resource, opts);
 }
 Alpine.directive('rm', (el) => el.remove());
 const FILTERS = Symbol('filters');
@@ -121,7 +136,7 @@ function reloadable(obj, _fetch, _ensure, opts = {}, root) {
     if (obj === undefined) return obj;
     obj[FETCH] = _fetch;
     root ??= obj;
-    _ensure ??= DEFAULT_FILTER();
+    _ensure ??= v => v;
     const ensure = (v) => {
         const r = _ensure(v, opts);
         return r;
