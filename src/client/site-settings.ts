@@ -27,6 +27,15 @@ export default function(config: ClientConfig, opts: EleventyPluginOptions): void
         </style>
         <div id="settings-cms" class="silex-hideable silex-hidden">
           <div class="gjs-sm-sector-title">Silex CMS</div>
+          <label>
+            Environment:
+            <textarea 
+              name="env" 
+              placeholder="BASE_URL=https://example.org" 
+              rows="10" 
+              value=${(settings as any).env}
+            >${(settings as any).env}</textarea>
+          </label>
           <div class="silex-help">
             <p>The <a target="_blank" href="https://github.com/silexlabs/silex-cms">Silex CMS feature</a> integrates with your favorite headless CMS, API or database.</p>
             <p>By adding data sources to your website you activate <a target="_blank" href="https://www.11ty.dev/docs/">11ty static site generator</a> integration. When you wil publish your website, the generated files assume you build the site with 11ty and possibly with Gitlab pages.</p>

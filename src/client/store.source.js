@@ -1,16 +1,32 @@
 export default `
+const FILTERS = Symbol('filters');
+const FETCH = Symbol('fetch');
 const _fetch = window.fetch.bind(window);
 let _csrf;
 function getCsrf() {
  if(_csrf) return _csrf;
  const scriptTag = document.querySelector('script#__csrf[type="text/plain"]');
  if (scriptTag) {
-    _csrf = scriptTag.textContent;
+    _csrf = scriptTag.textContent.trim();
  }
 return _csrf;
 }
+const _merged_tokens = new Set();
+/**
+ * Naughty global state whatever sue me
+ * */
+Alpine.store('ensure_csrf', async ({ id, token }) => {
+    if (_merged_tokens.has(id)) return;
+    const res = await fetch('/auth/csrf/merge', {
+        method: 'post',
+        body: JSON.stringify(token)
+    });
+    _merged_tokens.add(id);
+    _csrf = await res.text();
+    return;
+})
 Alpine.store('csrf', getCsrf)
-window.fetch = function(resource, opts) {
+fetch = window.fetch = function(resource, opts) {
     if (opts) {
         if (resource.charAt(0) === '/' || resource.startsWith(location.origin)) {
             const csrf = getCsrf();
@@ -23,8 +39,6 @@ window.fetch = function(resource, opts) {
     return _fetch(resource, opts);
 }
 Alpine.directive('rm', (el) => el.remove());
-const FILTERS = Symbol('filters');
-const FETCH = Symbol('fetch');
 
 function box(primitive) {
     return new Proxy({ value: primitive }, {

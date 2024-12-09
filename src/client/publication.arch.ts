@@ -14,7 +14,7 @@ import { ClientConfig } from '@silexlabs/silex/src/ts/client/config'
 import { REACTIVE_ID, UNWRAP_ID } from './traits'
 import { EleventyDataSourceId } from './DataSource'
 import { ACTIONS_JS } from './actions';
-import { isFixed, isHttp, isState, parseEntries, replaceAstExpressions, replaceObjectExpressions, tryParse } from './utils.js';
+import { isFixed, isHttp, isState, parseEntries, replaceAstExpressions, tryParse } from './utils.js';
 //import { ClientSideFile, ClientSideFileType, ClientSideFileWithContent, PublicationData } from '@silexlabs/silex/src/ts/types'
 const minify = minify_sync;
 // FIXME: should be imported from silex
@@ -704,7 +704,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
         if (hasDataScript) {
 
           alpineAttributes ??= '';
-          alpineAttributes += ` x-data="data_${sanitizeId(getDataId(component))}" `;
+          alpineAttributes += ` x-data="data_${sanitizeId(getOrCreatePersistantId(component))}" `;
         }
         if (bindScript) {
           alpineScripts.push(bindScript);
@@ -712,7 +712,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
         if (hasBindScript) {
 
           alpineAttributes ??= '';
-          alpineAttributes += ` x-bind="bind_${sanitizeId(getDataId(component))}" `;
+          alpineAttributes += ` x-bind="bind_${sanitizeId(getOrCreatePersistantId(component))}" `;
         }
         // component.set('script', script);
         // component.save({
@@ -721,7 +721,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
         if (hasCondition) {
           if ([condition?.expression, condition?.expression2].some(expression => expression?.[0] && !isHttp(expression[0] as any))) {
 
-            ifStart = `<template x-data="${!dataScript ? '' : sanitizeId(getDataId(component))}" x-if="` + genJs(toJsCondition(component, condition!), { minify: true }) + `">`;
+            ifStart = `<template x-data="${!dataScript ? '' : sanitizeId(getOrCreatePersistantId(component))}" x-if="` + genJs(toJsCondition(component, condition!), { minify: true }) + `">`;
             ifEnd = '</template>';
           }
           // let clone = component.clone();
@@ -750,7 +750,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
             throw new Error('This component has no persistant ID')
           }
           const stateVarName: string = toJsVarName(getStateVariableName(persistentId, '__data'))
-          reactiveForStart = `<template x-data="data_${!hasAlpineData(component) ? '' : sanitizeId(getDataId(component))}" x-for="` + `${stateVarName} in ${maybeAwaitJs(genJs(ensureFilteredData(toJsExpression(statesObj.__data.tokens, { component, liquidFilters: ['escape'], transformers: { baseFieldId: fieldId } }), statesObj.__data.tokens), { minify: true }))}` + '">'
+          reactiveForStart = `<template x-data="${!hasAlpineData(component) ? '' : sanitizeId(getOrCreatePersistantId(component))}" x-for="` + `${stateVarName} in ${maybeAwaitJs(genJs(ensureFilteredData(toJsExpression(statesObj.__data.tokens, { transformers: { baseFieldId: fieldId } }), statesObj.__data.tokens), { minify: true }))}` + '">'
           reactiveForEnd = '</template>';
           // console.log("set reactive for start/end", { reactiveForStart, reactiveForEnd, component });
           // let clone = component.clone();
@@ -788,7 +788,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
         for (const alpineScript of alpineScripts) {
           fullScript += alpineScript + '\n';
         }
-        alpineScript = `{% if flags.render-${getDataId(component)} %}\n${fullScript}\n{% endif %}`;
+        alpineScript = `{% if flags.render-${getOrCreatePersistantId(component)} %}\n${fullScript}\n{% endif %}`;
 
       }
       let before = (states ?? '') + (forStart ?? '') + (ifStart ?? '')
@@ -796,7 +796,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
       let after = (ifEnd ?? '') + (forEnd ?? '')
       if (alpineScript) {
         // if (scriptTop) before += alpineScript + '\n';
-        after = `{{ "render-${getDataId(component)}" | set_flag }}` + after;
+        after = `{{ "render-${getOrCreatePersistantId(component)}" | set_flag }}` + after;
         // else after = alpineScript + '\n' + after;
         const cachedScripts = cache.get('$alpine-scripts') || {};
         if (!component.frame) throw new Error("Why no frame?");
@@ -1031,7 +1031,7 @@ function getValue(value: any) {
 }
 
 function getAlpineDataScript(component: Component, config: ClientConfig): [string, boolean] {
-  const key = 'data_' + sanitizeId(getDataId(component));
+  const key = 'data_' + sanitizeId(getOrCreatePersistantId(component));
   if (cache.has(key)) return ['', cache.get(key)];
   const publicStates: StoredStateWithId[] = (component.get('publicStates') || []);
   // console.log("data script public states:", publicStates, component, component.tagName)
@@ -1234,7 +1234,7 @@ const CHAIN_FILTERS = (
 }
 
 const STATE_SETTER = {
-  getArguments(_expr: Property, opts: ToJsExpressionOpts): ESTree.Expression {
+  getArguments(_expr: Property, opts?: ToJsExpressionOpts): ESTree.Expression {
     const expr: Property = _expr as any;
     if (!expr.options) throw new Error("Options required for set_state action")
     const options: any = expr.options;
@@ -1296,7 +1296,7 @@ const STATE_SETTER = {
               chain: v => v,
               middleware: CHAIN_FILTERS(root, opts)
             }
-          } as ToJsExpressionOpts),
+          }),
           kind: "init",
           shorthand: false,
           computed: false,
@@ -1365,7 +1365,7 @@ const ACTIONS: Record<string, typeof STATE_SETTER> = Object.fromEntries(MUTATORS
                 type: "Identifier",
                 name: "test"
               },
-              value: TEST_OPS[testOp](() => awaited(toJsExpression(testLeft, opts)), () => awaited(toJsExpression(testRight, opts)))
+              value: TEST_OPS[testOp](() => awaited(toJsExpression(testLeft, opts)), () => awaited(toJsExpression(testRight)))
             },
             {
               type: "Property",
@@ -1458,11 +1458,8 @@ const FILTERS: Record<string, {
 
 }
 type ToJsExpressionOpts = {
-  component: Component
+  component?: Component
   event?: any
-  states?: string[]
-  fromserver?: boolean
-  liquidFilters?: string[]
   transformers?: {
     root?: (v: ESTree.Expression) => ESTree.Expression
     chain?: (v: ESTree.Expression) => ESTree.Expression,
@@ -1493,7 +1490,7 @@ const ensureJs = v => v || { type: "Identifier", name: "undefined" }
 function mkLiquidGetter(t: string) {
   return (
     expr: Property,
-    opts: ToJsExpressionOpts): ESTree.Expression => {
+    opts?: ToJsExpressionOpts): ESTree.Expression => {
     return {
       type: "Identifier",
       name: `{{ ${t}.${expr.options!.key as any} | json }}`
@@ -1564,38 +1561,11 @@ const EXPRESSION_MAPPERS: Record<string, Record<string, ReturnType<typeof mkLiqu
       const alternate: any = expr.options?.alternate;
       return awaited({
         type: "ConditionalExpression",
-        test: TEST_OPS[testOp](() => toJsExpression(testLeft, opts), () => toJsExpression(testRight, opts)),
+        test: TEST_OPS[testOp](() => toJsExpression(testLeft, opts), () => toJsExpression(testRight)),
         consequent: toJsExpression(consequent, opts),
         alternate: toJsExpression(alternate, opts)
       })
-    },
-    'binop'(
-      expr,
-      opts
-    ) {
-      const left: any = expr.options?.left;
-      const op: any = expr.options?.op;
-      const right: any = expr.options?.right;
-      return awaited({
-        type: "BinaryExpression",
-        left: toJsExpression(left, opts),
-        operator: op,
-        right: toJsExpression(right, opts),
-      })
-    },
-    'unop'(
-      expr,
-      opts
-    ) {
-      const argument: any = expr.options?.argument;
-      const op: any = expr.options?.op;
-      return awaited({
-        type: "UnaryExpression",
-        argument: toJsExpression(argument, opts),
-        operator: op,
-        prefix: true
-      })
-    },
+    }
 
   },
   'http': {
@@ -1605,17 +1575,16 @@ const EXPRESSION_MAPPERS: Record<string, Record<string, ReturnType<typeof mkLiqu
     'get_local': mkLiquidGetter('locals'),
     'get_body': mkLiquidGetter('body'),
     'get_query': mkLiquidGetter('query'),
-    'get_env': mkLiquidGetter('env'),
+
   }
 }
-function awaited(ast: ESTree.Expression): ESTree.AwaitExpression {
+function awaited(ast): ESTree.AwaitExpression {
   return {
     type: "AwaitExpression",
     argument: ast
   }
 }
-export function toJsExpression(expression: Expression | null | undefined, opts: ToJsExpressionOpts): ESTree.Expression {
-  if (!expression) return { type: "Identifier", name: "null" };
+export function toJsExpression(expression?: Expression, opts?: ToJsExpressionOpts): ESTree.Expression {
   if (typeof expression === 'string') expression = JSON.parse(expression);
   if (!expression || !expression.length) return { type: "Identifier", name: "null" }
   // console.log("Input expression:", expression);
@@ -1627,8 +1596,7 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
   middleware ??= CHAIN_FILTERS(root, opts);
   baseFieldId ??= t => t.fieldId
   if (first.type === 'property' && first.dataSourceId === 'actions') {
-    let fromserver = opts.fromserver;
-    const ret = {
+    return {
       type: "CallExpression",
       optional: false,
       callee: {
@@ -1657,91 +1625,21 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
         .filter(e => Boolean(e.dataSourceId))
         // .filter(e => )
         .reduce((exprs: { value: ESTree.Expression[], state: any }, e: Property, idx, arr) => {
-          const prev = arr[idx - 1];
-          if (false && e.fieldId === 'email') {
-            const _payload: any = e.options?.expression;
-            const template: string = e.options?.template as any;
-            if (_payload && template) {
-              const payload = JSON.parse(_payload);
-              const ast = toJsExpression(payload, opts);
+          if (e.fieldId === 'from_server') {
+            const actionsData: any = e.options?.expression;
+            if (actionsData) {
+              const actions = JSON.parse(actionsData);
+              const ast = toJsExpression(actions, opts);
+              const js = genJs(ast, { minify: false });
               exprs.value.push({
-                type: "CallExpression",
-                optional: false,
-                callee: {
-                  type: "Identifier",
-                  name: "fetch"
-                },
-                arguments: [
-                  {
-                    type: "Literal",
-                    value: template
-                  },
-                  {
-                    type: "ObjectExpression",
-                    properties: [
-                      {
-                        type: "Property",
-                        kind: "init",
-                        shorthand: false,
-                        computed: false,
-                        method: false,
-                        key: {
-                          type: "Identifier",
-                          name: "method"
-                        },
-                        value: {
-                          type: "Literal",
-                          value: "post"
-                        }
-                      },
-                      {
-                        type: "Property",
-                        kind: "init",
-                        shorthand: false,
-                        computed: false,
-                        method: false,
-                        key: {
-                          type: "Identifier",
-                          name: "body"
-                        },
-                        value: {
-                          type: "CallExpression",
-                          optional: false,
-                          callee: {
-                            type: "MemberExpression",
-                            optional: false,
-                            computed: false,
-                            object: {
-                              type: "Identifier",
-                              name: "JSON"
-                            },
-                            property: {
-                              type: "Identifier",
-                              name: "stringify"
-                            }
-                          },
-                          arguments: [
-                            ast
-                          ]
-                        }
-                      }
-                    ]
-                  }
-                ]
-              })
-
-            } else {
-              throw new Error("`body` and `template` required.");
+                type: "Identifier",
+                name: `{% fromserver %}${js}{% endfromserver %}`
+              });
             }
           }
           else if (ACTIONS[e.fieldId]) {
-            const firstFromServerCall = (!prev || !ACTIONS[prev.fieldId]) && !opts.states;
-            let states: string[];
-            if (firstFromServerCall) {
-              states = [];
-              opts.states = states;
-            }
-            const expr: ESTree.Expression = {
+
+            exprs.value.push({
               type: "CallExpression",
               callee: {
                 type: "MemberExpression",
@@ -1769,41 +1667,10 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
                 ACTIONS[e.fieldId].getArguments(e, opts)
               ],
               optional: true
-            };
-            exprs.value.push(expr);
-            if (firstFromServerCall) {
-              const last = expr;
-
-              exprs.value[exprs.value.length - 1] = (() => ({
-                type: "Identifier",
-                name: `{% fromserver ${getDataId(opts.component)}-${Math.random() * Date.now()} ${states./* map(s => `"${s}"`). */join(' ')} %}` +
-                  genJs({
-                    type: "MemberExpression",
-                    optional: false,
-                    computed: false,
-                    object: root({
-                      type: "Identifier",
-                      name: "$store"
-                    }),
-                    property: {
-                      type: "Identifier",
-                      name: "run_all"
-                    }
-                  }, { minify: false }) + "(() => " +
-                  genJs(last, { minify: false }) +
-                  (idx === arr.length - 1 ? "){% endfromserver %}" : '')
-              })) as any
-            }
+            });
           } else if (opts?.event) {
+            const prev = arr[idx - 1];
             if (!prev || ACTIONS[prev.fieldId]) {
-              const last: any = exprs.value[exprs.value.length - 1];
-              if (last) {
-                delete opts.states;
-                exprs.value[exprs.value.length - 1] = {
-                  type: "Identifier",
-                  name: genJs(last instanceof Function ? last() : last, { minify: false }) + "){% endfromserver %}"
-                }
-              }
               exprs.state.serverSideEvtCallIdx ??= 0;
               exprs.state.options = [];
               exprs.value.push({
@@ -1904,23 +1771,10 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
               })
             }
             const options: ESTree.ObjectExpression["properties"] = exprs.state.options;
-            const parsed = parseEntries(e?.options || {});
-            parsed.forEach(function extractStates([k, v]: [string, any]) {
-              let expression;
-              if (v && Array.isArray(v) && v.length && v[0] && v[0].type && v[0].label && ['property', 'filter', 'state'].includes(v[0].type)) {
-                expression = v;
-              }
-              if (!expression) return;
-              for (const token of expression as Expression) {
-                if (token.type === 'property' && token.fieldId === 'json') {
-                  const obj = JSON.parse(token.options?.value as any);
-                  replaceObjectExpressions(obj, (v, { path }) => {
-                    if (typeof v === 'string') (v) = JSON.parse(v);
-                    return v && extractStates([path, v]);
-                  });
-                }
-                else if (token.type === 'state') {
-                  const stateId = stateVarName(token);
+            const parsed = Object.fromEntries(parseEntries(e?.options || {}));
+            if (parsed.value)
+              for (const token of parsed.value as Expression) {
+                if (token.type === 'state') {
                   options.push({
                     type: "Property",
                     computed: false,
@@ -1929,17 +1783,17 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
                     kind: "init",
                     key: {
                       type: "Literal",
-                      value: stateId
+                      value: toJsVarName(getStateVariableName(token.componentId, token.storedStateId))
                     },
                     value: {
                       type: "MemberExpression",
-                      object: root({
+                      object: {
                         type: "Identifier",
                         name: "$data"
-                      }),
+                      },
                       property: {
                         type: "Literal",
-                        value: stateId
+                        value: toJsVarName(getStateVariableName(token.componentId, token.storedStateId))
                       },
                       computed: true,
                       optional: true,
@@ -1947,18 +1801,16 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
                   });
                 }
               }
-            })
           }
           return exprs;
         }, { value: [] as ESTree.Expression[], state: {} }).value
         .map((e): ESTree.ArrowFunctionExpression => ({
           type: "ArrowFunctionExpression",
           expression: true,
-          body: e instanceof Function ? e() : e,
+          body: e,
           params: []
         }))
     }
-    return ret as ESTree.Expression;
   }
   let currentJs: ESTree.Expression | undefined;
   for (let i = 0; i < expression.length; i++) {
@@ -1975,31 +1827,24 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
           const mapper = EXPRESSION_MAPPERS?.[expr.dataSourceId]?.[expr.fieldId]
           if (mapper) {
             currentJs = mapper(expr, opts)
-          } else if (i === 0 && isDataSourceField(expr)) {
-            if (!opts?.component) throw new Error("`opts.component` required.");
-            const after = expression.slice(i);
-            const end = after.findIndex(t => t.type !== 'property' || t.dataSourceId !== expr.dataSourceId);
-            const liquidExpr = after.slice(0, end === -1 ? undefined : end);
-            i += liquidExpr.length;
-            console.log({ after, end, liquidExpr });
-            if (liquidExpr.length) {
-
-              currentJs = {
-                type: "Identifier",
-                name: echoBlock1line(opts.component, liquidExpr).slice(0, -2) + `| json ${opts?.liquidFilters?.length ?
-                    '| ' + opts.liquidFilters.join(' | ') + ' ' :
-                    ''
-                  }}}`
-              }
-            }
           } else {
+
             if (!currentJs) {
               currentJs = {
-                type: "Identifier",
-                name: expr.dataSourceId as string
+                type: "MemberExpression",
+                object: root({
+                  type: "Identifier",
+                  name: "$store"
+                }),
+                property: {
+                  type: "Literal",
+                  value: expr.dataSourceId
+                },
+                optional: true,
+                computed: true,
               }
-            }
 
+            }
             currentJs = {
               type: "MemberExpression",
               object: currentJs,
@@ -2012,44 +1857,15 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
             }
             chain();
 
+            if (expr.options && Object.keys(expr.options).length) {
+              currentJs = {
+                type: "CallExpression",
+                callee: currentJs,
+                arguments: [pojsoToAST(reifyProperties(expr.options, opts, { fixed: false, http: false, })),],
+                optional: true,
+              }
+            }
           }
-          //   if (!currentJs) {
-          //     currentJs = {
-          //       type: "MemberExpression",
-          //       object: root({
-          //         type: "Identifier",
-          //         name: "$store"
-          //       }),
-          //       property: {
-          //         type: "Literal",
-          //         value: expr.dataSourceId
-          //       },
-          //       optional: true,
-          //       computed: true,
-          //     }
-
-          //   }
-          //   currentJs = {
-          //     type: "MemberExpression",
-          //     object: currentJs,
-          //     property: {
-          //       type: "Literal",
-          //       value: i !== 0 ? expr.fieldId : baseFieldId(expr)
-          //     },
-          //     computed: true,
-          //     optional: true,
-          //   }
-          //   chain();
-
-          //   if (expr.options && Object.keys(expr.options).length) {
-          //     currentJs = {
-          //       type: "CallExpression",
-          //       callee: currentJs,
-          //       arguments: [pojsoToAST(reifyProperties(expr.options, opts, { fixed: false, http: false, })),],
-          //       optional: true,
-          //     }
-          //   }
-          // }
 
         } else {
           if (expr.fieldId === 'fixed') {
@@ -2064,12 +1880,9 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
         break;
       }
       case "state": {
-
-        const stateId = stateVarName(expr);
-        if (opts?.states) {
-          console.log("from server state:", stateId);
-          opts.states.push(stateId);
-        }
+        const stateId = (expr.componentId && expr.storedStateId === '__data') ?
+          toJsVarName(getStateVariableName(expr.componentId || "", "__data")) :
+          expr.storedStateId
         currentJs = {
           type: "MemberExpression",
           object: root({
@@ -2165,7 +1978,7 @@ function getAlpineBindScript(
     }[];
     originalAttributes?: Record<string, string>;
   }): [string, boolean] {
-  const key = `bind_${sanitizeId(getDataId(component))}`;
+  const key = `bind_${sanitizeId(getOrCreatePersistantId(component))}`;
   if (cache.has(key)) return ['', cache.get(key)];
   if (!opts.statesObj || !opts.statesPrivate || !opts.statesPublic) {
     if (!opts.config) throw new Error("Config or states required.");
@@ -2193,7 +2006,7 @@ function getAlpineBindScript(
   const attrs: any = {
     ...opts.originalAttributes,
     ...(boundAttributes),
-    // 'x-data': !hasData ? true : sanitizeId(getDataId(component)),
+    // 'x-data': !hasData ? true : sanitizeId(getOrCreatePersistantId(component)),
     'x-html': maybeAwaitJs(genJs(
       ensureFilteredData(
         toJsExpression(
@@ -2223,8 +2036,8 @@ function getAlpineBindScript(
     delete attrs['x-html']
   }
   if (hasReactiveProps(component) || component.defaults.script) {
-    // if (typeof attrs['x-data'] !== 'string' || attrs['x-data'].length === 0) attrs['x-data'] = sanitizeId(getDataId(component));
-    attrs["x-init"] = `this.$$init.bind(this)(${getInitializerOpts(component)})`;
+    // if (typeof attrs['x-data'] !== 'string' || attrs['x-data'].length === 0) attrs['x-data'] = sanitizeId(getOrCreatePersistantId(component));
+    attrs["x-init"] = `$$init(${getInitializerOpts(component)})`;
   }
   // component.removeAttributes(Object.keys(component.getAttributes()));
   // component.addAttributes(attrs);
@@ -2241,7 +2054,7 @@ function getAlpineBindScript(
 }
 
 function toJsCondition(component: Component, condition: { expression: Token[]; expression2?: Token[]; operator: UnariOperator | BinariOperator; }): ESTree.Expression {
-  const exprs = [condition.expression, condition.expression2].filter(Boolean).map(e => toJsExpression(e!, { component, transformers: { baseFieldId: p => getFieldId(component, p) } }));
+  const exprs = [condition.expression, condition.expression2].filter(Boolean).map(e => toJsExpression(e!, { transformers: { baseFieldId: p => getFieldId(component, p) } }));
   switch (condition.operator) {
     case UnariOperator.NOT_EMPTY_ARR:
     case UnariOperator.EMPTY_ARR:
@@ -2355,7 +2168,7 @@ function reifyProperties(options: any, genOpts: ToJsExpressionOpts | undefined, 
       $$empty: true
     }
   }
-  return Object.fromEntries(entries.map(e => [e[0], toJsExpression(e[1], { ...genOpts, reifyOpts: { ...(genOpts?.reifyOpts || {}), ...(overrides || {}) } } as ToJsExpressionOpts)]))
+  return Object.fromEntries(entries.map(e => [e[0], toJsExpression(e[1], { ...genOpts, reifyOpts: { ...(genOpts?.reifyOpts || {}), ...(overrides || {}) } })]))
 }
 
 
@@ -2366,7 +2179,7 @@ function ensureFilteredData(arg0: ESTree.Expression, tokens: Token[], forceEnsur
   // ensure = ensure || tokens?.[0]?.type === 'state';
   const filtered = tokens.find(t => t.type === 'filter');
 
-  if (false && ensure) {
+  if (ensure) {
     arg0 = {
       type: "CallExpression",
       callee: {
@@ -2826,7 +2639,7 @@ function getHttpMethod(dsRef: Property, config: ClientConfig): string {
   // return dsRef.fieldId.split(' ').shift()!;
 }
 const METHODS = ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS', 'QUERY']
-function isDataSourceField(expr: Property) {
+function isDataSourceField(expr: Property & { index: number; }) {
   if (!expr.dataSourceId || !isDataSource(expr.dataSourceId)) return;
   if (!expr.fieldId) return;
   // const ret = METHODS.includes(expr.fieldId.split(' ')[0])
@@ -2870,7 +2683,7 @@ function getStatesObj(config: ClientConfig, component: Component) {
   const editor = config.getEditor() as unknown as DataSourceEditor
 
   const dataTree = editor.DataSourceManager.getDataTree()
-  const componentId = sanitizeId(getDataId(component));
+  const componentId = sanitizeId(getOrCreatePersistantId(component));
   const statesPrivate = withNotification(() => getRealStates(dataTree, getStateIds(component, false)
     .map(stateId => ({
       stateId,
@@ -2968,7 +2781,7 @@ function getReactiveProps(component: Component): ESTree.ObjectExpression["proper
           body: [
             {
               type: "ReturnStatement",
-              argument: ensureFilteredData(toJsExpression(expr, { component, transformers: { baseFieldId: p => getFieldId(component, p) } }), expr as any)
+              argument: ensureFilteredData(toJsExpression(expr, { transformers: { baseFieldId: p => getFieldId(component, p) } }), expr as any)
 
             }
           ]
@@ -3037,25 +2850,12 @@ function explode(expr) {
 
           return [e.options?.stmt].filter(Boolean).map((s: any) => JSON.parse(s)).filter(filterEmptyExpressions);
         }
-        case 'ternary':
         case 'case': {
-          return [e.options?.test, e.options?.consequent, e.options?.alternate].filter(Boolean).map((s: any) => JSON.parse(s)).filter(filterEmptyExpressions);
+          return [e.options?.test, e.options?.consequent, e.options?.alternate].filter(Boolean).map((s: any) => JSON.parse).filter(filterEmptyExpressions);
         }
         default:
           return [e];
       }
     }
   })
-}
-function stateVarName(expr) {
-  return (expr.componentId && expr.storedStateId === '__data') ?
-    toJsVarName(getStateVariableName(expr.componentId || "", "__data")) :
-    expr.storedStateId;
-}
-function getDataId(component: Component) {
-  const cId = getOrCreatePersistantId(component);
-  return [component.cid, cId].join('_')
-}
-function escapeQuotesForHtmlAttribute(str) {
-  return str.replace(/"/g, '&quot;');
 }

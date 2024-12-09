@@ -3,7 +3,7 @@ import { Component } from 'grapesjs'
 import { EleventyDataSourceId } from './DataSource'
 import OpenApi from '@silexlabs/grapesjs-data-source/src/datasources/OpenApi'
 import snakecase from 'snakecase';
-import { isFixed, isHttp, isState, parseEntries } from './utils';
+import { isFixed, isHttp, isState, parseEntries, replaceObjectExpressions } from './utils';
 export interface BinaryCondition {
   operator: BinariOperator,
   expression: Expression,
@@ -18,6 +18,72 @@ export interface UnaryCondition {
 export type Condition = BinaryCondition | UnaryCondition
 const EXPRESSION_HANDLERS = {
   inline: {
+    "core": {
+      "ternary"(component: Component, token: Property) {
+        if (!token.options?.left || !token.options?.right) throw new Error("`left` and `right` required for binops");
+        const parsed = Object.fromEntries(parseEntries(token.options));
+        const test = getLiquidBlock(component, parsed.test);
+        const consequent = getLiquidBlock(component, parsed.consequent);
+        const alternate = getLiquidBlock(component, parsed.alternate);
+        const last = `${test[test.length - 1].variableName} | ternary: ${consequent[consequent.length - 1].variableName}, ${alternate[alternate.length - 1].variableName}`
+        const variableName = getNextVariableName(component, numNextVar++);
+        return [...test, ...consequent, ...alternate, {
+          variableName, liquid: last
+        }]
+      },
+      "binop"(component: Component, token: Property) {
+        if (!token.options?.left || !token.options?.right) throw new Error("`left` and `right` required for binops");
+        const parsed = Object.fromEntries(parseEntries(token.options));
+        const left = getLiquidBlock(component, parsed.left);
+        const right = getLiquidBlock(component, parsed.right);
+        const last = `${left[left.length - 1].variableName} | binop: "${token.options.op}", ${right[right.length - 1].variableName}`;
+        const variableName = getNextVariableName(component, numNextVar++);
+        return [...left, ...right, {
+          variableName, liquid: last
+        }]
+      },
+      "unop"(component: Component, token: Property) {
+        if (!token.options?.left || !token.options?.right) throw new Error("`left` and `right` required for binops");
+        const parsed = Object.fromEntries(parseEntries(token.options));
+        const left = getLiquidBlock(component, parsed.left);
+        const last = `${left[left.length - 1].variableName} | unop: "${token.options.op}"`;
+        const variableName = getNextVariableName(component, numNextVar++);
+        return [...left, {
+          variableName, liquid: last
+        }]
+      },
+      "json"(component: Component, token: Property) {
+        if (!token.options?.value) throw new Error("`value` is required");
+        const fieldId = getFieldId(component, token);
+        const replacements: [string, string][] = [];
+        const parsed = JSON.parse(token.options.value as string);
+        replaceObjectExpressions(parsed, (v, opts) => {
+          if (!v) return v;
+          try {
+            console.log("encountered", ...arguments);
+            const expr: Expression = JSON.parse(v);
+            if (expr[0].type === 'state') {
+              replacements.push([opts.path.join('/'), getLiquidStatementProperties(component, expr as any)]);
+              return;
+            }
+          } catch (e) {
+            console.error("Error parsing JSON token", token, e)
+            return;
+          }
+          return v;
+        });
+        const last = 'core.' + fieldId + (replacements.length ? ` | with_patches: ${replacements
+          .map(
+            ([path, replacement]) => ['"' + path + '"', replacement].join(',')
+          ).join(',')}` : '');
+
+        const variableName = getNextVariableName(component, numNextVar++);
+        return [{
+          variableName,
+          liquid: `${last}`
+        }]
+      }
+    },
     "http": {
       "get_session"(component: Component, token: Property) {
         if (!token?.options?.key) throw new Error("`key` is required.");
@@ -38,30 +104,53 @@ const EXPRESSION_HANDLERS = {
       "get_local"(component: Component, token: Property) {
         if (!token?.options?.key) throw new Error("`key` is required.");
         return `locals.${token.options.key}`
+      },
+      "get_env"(component: Component, token: Property) {
+        if (!token?.options?.key) throw new Error("`key` is required.");
+        return `env.${token.options.key}`
       }
     }
   },
-  block: {
+  isolated: {
+    "core": {
+      "unop"(component: Component, token: Property) {
+        const r = EXPRESSION_HANDLERS.inline.core.unop(component, token);
+        return justGetLiquid(r);
+      },
+      "binop"(component: Component, token: Property) {
+        const r = EXPRESSION_HANDLERS.inline.core.binop(component, token);
+        return justGetLiquid(r);
+      },
+      "ternary"(component: Component, token: Property) {
+        const r = EXPRESSION_HANDLERS.inline.core.ternary(component, token);
+        return justGetLiquid(r);
+      },
+      "json"(component: Component, token: Property) {
+        const r = EXPRESSION_HANDLERS.inline.core.json(component, token);
+        return justGetLiquid(r);
+      },
+    },
     "http": {
+
       "get_session"(component: Component, token: Property) {
         if (!token?.options?.key) throw new Error("`key` is required.");
-        return `{{session.${token.options.key}}}`
+        return `session.${token.options.key}`
       },
       "get_body"(component: Component, token: Property) {
         if (!token?.options?.key) throw new Error("`key` is required.");
-        return `{{body.${token.options.key}}}`
+        return `body.${token.options.key}`
       },
       "get_query"(component: Component, token: Property) {
         if (!token?.options?.key) throw new Error("`key` is required.");
-        return `{{query.${token.options.key}}}`
+        return `query.${token.options.key}`
       },
       "get_cookie"(component: Component, token: Property) {
         if (!token?.options?.key) throw new Error("`key` is required.");
-        return `{{cookies.${token.options.key}}}`
+        return `cookies.${token.options.key}`
       },
       "get_local"(component: Component, token: Property) {
         if (!token?.options?.key) throw new Error("`key` is required.");
-        return `{{locals.${token.options.key}}}`
+        return `locals.${token.options.key}`
       }
     },
 
@@ -76,12 +165,12 @@ export function echoBlock(component: Component, expression: Expression): string 
     return expression[0].options?.value as string ?? ''
   }
   const firstTok = expression[0];
-  if (
-    firstTok.type === 'property' &&
-    EXPRESSION_HANDLERS.block[firstTok.dataSourceId!][firstTok.fieldId]
-  ) {
-    return EXPRESSION_HANDLERS.block[firstTok.dataSourceId!][firstTok.fieldId](component, firstTok);
-  }
+  // if (
+  //   firstTok.type === 'property' &&
+  //   EXPRESSION_HANDLERS.isolated?.[firstTok.dataSourceId!]?.[firstTok.fieldId]
+  // ) {
+  //   return '{% liquid \n' + EXPRESSION_HANDLERS.isolated?.[firstTok.dataSourceId!]?.[firstTok.fieldId](component, firstTok) + '\n %}';
+  // }
   const statements = getLiquidBlock(component, expression)
   return `{% liquid
     ${statements
@@ -101,12 +190,12 @@ export function echoBlock1line(component: Component, expression: Expression): st
     return expression[0].options?.value as string ?? ''
   }
   const firstTok = expression[0];
-  if (
-    firstTok.type === 'property' &&
-    EXPRESSION_HANDLERS.block[firstTok.dataSourceId!][firstTok.fieldId]
-  ) {
-    return EXPRESSION_HANDLERS.block[firstTok.dataSourceId!][firstTok.fieldId](component, firstTok);
-  }
+  // if (
+  //   firstTok.type === 'property' &&
+  //   EXPRESSION_HANDLERS.isolated?.[firstTok.dataSourceId!]?.[firstTok.fieldId]
+  // ) {
+  //   return '{% ' + EXPRESSION_HANDLERS.isolated?.[firstTok.dataSourceId!]?.[firstTok.fieldId](component, firstTok) + ' %}';
+  // }
   const statements = getLiquidBlock(component, expression)
   return `{% ${statements
     .map(({ liquid }) => liquid)
@@ -233,31 +322,46 @@ export function getPaginationData(component: Component, expression: Property[]):
     return ''
   }
 }
-
+function justGetLiquid(stmt) {
+  return Array.isArray(stmt) ? stmt[stmt.length-1].liquid : stmt;
+}
 /**
  * Convert an expression to liquid code
  */
 export function getLiquidBlock(component: Component, expression: Expression): { variableName: string, liquid: string }[] {
   const token = expression[0];
-  if (
-    token.type === 'property' &&
-    EXPRESSION_HANDLERS.block?.[token?.dataSourceId!]?.[token?.fieldId]
-  ) {
-    const ref = EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);;
-    return [
-      {
-        variableName: ref,
-        liquid: ref
-      }
-    ]
-  }
+  const result = [] as { variableName: string, liquid: string }[]
   if (expression.length === 0) return []
   expression = expression.slice();
-  const result = [] as { variableName: string, liquid: string }[]
   const firstToken = expression[0]
   let lastVariableName = ''
-  if (firstToken.type === 'filter') throw new Error('Expression cannot start with a filter')
-  if (firstToken.type === 'property' && firstToken.dataSourceId && firstToken.dataSourceId !== 'eleventy') {
+  if (
+    token.type === 'property' &&
+    EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId]
+  ) {
+    const stmt = EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);;
+    if (Array.isArray(stmt)) {
+      result.push(...stmt)
+      const last = result[result.length-1];
+      last.liquid = `assign ${last.variableName} = ${last.liquid}`
+    } else {
+      result.push({
+        variableName: stmt,
+        liquid: ''
+      });
+    }
+    expression.splice(0, 1);
+    // return [
+    //   {
+    //     variableName: ref,
+    //     liquid: ref
+    //   }
+    // ]
+
+  }
+
+  else if (firstToken.type === 'filter') throw new Error('Expression cannot start with a filter')
+  else if (firstToken.type === 'property' && firstToken.dataSourceId && firstToken.dataSourceId !== 'eleventy') {
     const optVarName = getOptId(component, firstToken);
     const dsPropRef = `${firstToken.dataSourceId}.${getFieldId(component, firstToken)}`;
     const tempName = snakecase(dsPropRef + '_' + numNextVar++);
@@ -331,7 +435,7 @@ export function getLiquidStatementProperties(component: Component, properties: (
       token.type === 'property' &&
       EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId]
     ) {
-      return EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);
+      return justGetLiquid(EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token));
     }
     switch (token.type) {
       case 'state': {
@@ -394,7 +498,7 @@ function handleFilterOption(component: Component, filter: Filter, key: string, v
           token.type === 'property' &&
           EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId]
         ) {
-          return EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);
+          return justGetLiquid(EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token));
         }
         switch (token.type) {
           case 'property': {
@@ -459,13 +563,33 @@ function getWrapperComponent(component: Component): Component | undefined {
  * @param firstToken 
  */
 export function getSubstitutionOptions(component: Component, firstToken: StoredProperty): string {
-  if (!firstToken.options) return '';
+  if (true || !firstToken.options) return '';
   const opts = firstToken.options;
   const parsed = parseEntries(opts);
   const serverSideFields = parsed.filter(
     ([k, expr]: [string, any]) =>
       isState(expr[0])
   );
+  // const parsedObj = Object.fromEntries(parsed);
+  const jsonProps: any = parsed.map(([k, v]) => {
+    const tok = v[0];
+    if (tok.type === 'property' && tok.dataSourceId === 'core' && tok.fieldId === 'json') {
+      return [k, JSON.parse(tok.options?.value as string)]
+    }
+  }).filter(Boolean)
+  jsonProps.forEach(([trunk, parsedObj]) => replaceObjectExpressions(parsedObj, (v, { path }) => {
+    if (!v) return v;
+    console.log("encountered", ...arguments);
+
+    try {
+      const expr = JSON.parse(v);
+      if (isState(expr[0])) {
+        serverSideFields.push([[trunk, ...path].join('/'), expr])
+      }
+    } catch (e) {
+      console.error("Failed to parse JSON token:", v, path, e);
+    }
+  }));
   return serverSideFields.map(e => `"${e[0]}", ${getLiquidStatementProperties(component, e[1] as any)}`).join(', ')
 }
 

@@ -50,11 +50,12 @@
   "dependencies": {
     "@humanwhocodes/retry": "^0.3.0",
     "@silexlabs/grapesjs-data-source": "file:../libs/silexlabs-grapesjs-data-source-0.0.119.tgz",
-    "@silexlabs/silex": "file:silexlabs-silex-3.0.0-alpha.180.tgz",
+    "@silexlabs/silex": "github:piboistudios/Silex",
     "astring": "^1.9.0",
     "dedent": "^1.5.3",
     "deepmerge": "^4.3.1",
     "grapesjs": "^0.21.10",
+    "meriyah": "^6.0.3",
     "snakecase": "^1.0.0",
     "terser": "^5.36.0"
   },

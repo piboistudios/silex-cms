@@ -119,6 +119,9 @@ function render(settings: Silex11tyPluginWebsiteSettings, config: ClientConfig, 
         <option value="get" .selected=${settings.method === 'get'}>GET</option>
         <option value="post" .selected=${settings.method === 'post'}>POST</option>
       </select>
+       <label class="silex-form__element">E-Mail Template?
+          <input type="checkbox" name="email_template" ?checked=${!!settings.email_template}/>
+        </label>
       <div class="silex-form__group col2">
         <label class="silex-form__element">
           <h3>Create pages from data</h3>

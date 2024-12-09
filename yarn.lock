@@ -876,7 +876,7 @@
 "@silexlabs/grapesjs-data-source@file:../libs/silexlabs-grapesjs-data-source-0.0.119.tgz":
   version "0.0.119"
   resolved "file:../libs/silexlabs-grapesjs-data-source-0.0.119.tgz"
-  integrity sha512-eU8ZHJO5EV7LqskC4o2O/cectMZXtuCXcun+W3DsSTtB2fQ7Qtsp51Ogj5vpTqsx+XTUSw3EkjIkR5RcCVkeRw==
+  integrity sha512-ltZoxN4uUdDDyBbQPdHqUKnq5ghcr38SqjhnDJxgnpRp25VMrct/qpcKFGlIoGj6wLCV/YRg6gXRF7tqPOxW7A==
   dependencies:
     "@apollo/client" "^3.9.10"
     "@silexlabs/expression-input" "^0.0.23"
@@ -947,10 +947,9 @@
   resolved "https://registry.npmjs.org/@silexlabs/silex-plugins/-/silex-plugins-1.0.10.tgz"
   integrity sha512-o/quWIq98mpGr76XMmpEPAx73ZskyyIXaQ4K2tRmxnlt3UXUwGxcGq7b5H1MR62xTi9MTRmMvbsK5gaavIBTIQ==
 
-"@silexlabs/silex@file:silexlabs-silex-3.0.0-alpha.180.tgz":
+"@silexlabs/silex@github:piboistudios/Silex":
   version "3.0.0-alpha.180"
-  resolved "file:silexlabs-silex-3.0.0-alpha.180.tgz"
-  integrity sha512-Rxr133PVRxM4u8NKRAdIMlFFOFHbuwM8hICXa3yvc5s9zaHOZ7FWH+kc7Goqp5Mcu5IFDj0S7wCvAz3cwnIn4w==
+  resolved "git+ssh://git@github.com/piboistudios/Silex.git#27025a31433b15d0cd480572cfced1559d5c7be6"
   dependencies:
     "@fontsource/ubuntu" "^5.0.13"
     "@fortawesome/fontawesome-free" "6.6.0"
@@ -4120,6 +4119,11 @@ merge2@^1.3.0, merge2@^1.4.1:
   version "1.4.1"
   resolved "https://registry.npmjs.org/merge2/-/merge2-1.4.1.tgz"
   integrity sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==
+
+meriyah@^6.0.3:
+  version "6.0.3"
+  resolved "https://registry.npmjs.org/meriyah/-/meriyah-6.0.3.tgz"
+  integrity sha512-NqUbuQIjIH8dxUBPTMHS1kwIHd6n6nF3F7oeLXGWqBkpVP2lZxVHdab5JxbFBisIB4axZ9b/lT4HLJfZxmFK7Q==
 
 methods@~1.1.2:
   version "1.1.2"
