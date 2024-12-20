@@ -39,7 +39,8 @@ fetch = window.fetch = function(resource, opts) {
     return _fetch(resource, opts);
 }
 Alpine.directive('rm', (el) => el.remove());
-
+`;
+/*
 function box(primitive) {
     return new Proxy({ value: primitive }, {
         get(target, prop, receiver) {
@@ -218,4 +219,4 @@ function maybeBox(v) {
     }
     return v;
 }
-`;
+`;*/

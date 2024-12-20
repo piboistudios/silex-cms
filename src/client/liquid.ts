@@ -16,26 +16,46 @@ export interface UnaryCondition {
 }
 
 export type Condition = BinaryCondition | UnaryCondition
+function reify(e) {
+  return e?.length ? e/* .concat({
+    type: "filter",
+    id: "json",
+    filterName: "json"
+  } as StoredFilter)  */: [];
+}
+function reifyBlock(component, b) {
+  const last = b[b.length - 1];
+  const v = getNextVariableName(component, numNextVar++);
+  return [...b, {
+    variableName: v,
+    liquid: `assign ${v} = ${last.variableName} | json`
+  }];
+}
+function getLiquidBlockReified(component: Component, e: Expression) {
+  return reifyBlock(component, getLiquidBlock(component, (e)));
+}
 const EXPRESSION_HANDLERS = {
   inline: {
     "core": {
       "ternary"(component: Component, token: Property) {
-        if (!token.options?.left || !token.options?.right) throw new Error("`left` and `right` required for binops");
+        if (!token.options?.consequent || !token.options?.testLeft) throw new Error("`testLeft` and `consequent` required for ternaries");
         const parsed = Object.fromEntries(parseEntries(token.options));
-        const test = getLiquidBlock(component, parsed.test);
+        const testRight = getLiquidBlockReified(component, parsed.testRight);
+        const testOp = parsed.testOp;
+        const testLeft = getLiquidBlockReified(component, parsed.testLeft);
         const consequent = getLiquidBlock(component, parsed.consequent);
         const alternate = getLiquidBlock(component, parsed.alternate);
-        const last = `${test[test.length - 1].variableName} | ternary: ${consequent[consequent.length - 1].variableName}, ${alternate[alternate.length - 1].variableName}`
+        const last = `${testLeft[testLeft.length - 1].variableName} | ternary: "${testOp}", ${testRight[testRight.length - 1].variableName}, ${consequent[consequent.length - 1].variableName}, ${alternate[alternate.length - 1].variableName}`
         const variableName = getNextVariableName(component, numNextVar++);
-        return [...test, ...consequent, ...alternate, {
+        return [...testLeft, ...testRight, ...consequent, ...alternate, {
           variableName, liquid: last
         }]
       },
       "binop"(component: Component, token: Property) {
-        if (!token.options?.left || !token.options?.right) throw new Error("`left` and `right` required for binops");
+        if (!token.options?.left || !token.options?.right || !token.options?.op) throw new Error("`left`,`op` and `right` required for binops");
         const parsed = Object.fromEntries(parseEntries(token.options));
-        const left = getLiquidBlock(component, parsed.left);
-        const right = getLiquidBlock(component, parsed.right);
+        const left = getLiquidBlockReified(component, parsed.left);
+        const right = getLiquidBlockReified(component, parsed.right);
         const last = `${left[left.length - 1].variableName} | binop: "${token.options.op}", ${right[right.length - 1].variableName}`;
         const variableName = getNextVariableName(component, numNextVar++);
         return [...left, ...right, {
@@ -43,12 +63,12 @@ const EXPRESSION_HANDLERS = {
         }]
       },
       "unop"(component: Component, token: Property) {
-        if (!token.options?.left || !token.options?.right) throw new Error("`left` and `right` required for binops");
+        if (!token.options?.argument || !token.options?.op) throw new Error("`op` and `argument` required for unops");
         const parsed = Object.fromEntries(parseEntries(token.options));
-        const left = getLiquidBlock(component, parsed.left);
-        const last = `${left[left.length - 1].variableName} | unop: "${token.options.op}"`;
+        const argument = getLiquidBlockReified(component, parsed.argument);
+        const last = `${argument[argument.length - 1].variableName} | unop: "${token.options.op}"`;
         const variableName = getNextVariableName(component, numNextVar++);
-        return [...left, {
+        return [...argument, {
           variableName, liquid: last
         }]
       },
@@ -198,7 +218,7 @@ export function echoBlock1line(component: Component, expression: Expression): st
   // }
   const statements = getLiquidBlock(component, expression)
   return `{% ${statements
-    .map(({ liquid }) => liquid)
+    .flatMap(({ liquid }) => liquid.split('\n'))
     .join(' %}{% ')
     } %}{{ ${statements[statements.length - 1].variableName} }}`
 }
@@ -229,8 +249,8 @@ export function loopBlock(dataTree: DataTree, component: Component, expression: 
   if (expression.length === 0) throw new Error('Expression is empty')
   // Check data to loop over
   const field = getExpressionResultType(expression, component, dataTree)
-  if (!field) throw new Error(`Expression ${expression.map(token => token.label).join(' -> ')} is invalid`)
-  if (field.kind !== 'list') throw new Error(`Provided property needs to be a list in order to loop, not a ${field.kind}`)
+  // if (!field) throw new Error(`Expression ${expression.map(token => token.label).join(' -> ')} is invalid`)
+  // if (field.kind !== 'list') throw new Error(`Provided property needs to be a list in order to loop, not a ${field.kind}`)
   const statements = getLiquidBlock(component, expression)
   const loopDataVariableName = statements[statements.length - 1].variableName
   const persistantId = getPersistantId(component)
@@ -323,12 +343,13 @@ export function getPaginationData(component: Component, expression: Property[]):
   }
 }
 function justGetLiquid(stmt) {
-  return Array.isArray(stmt) ? stmt[stmt.length-1].liquid : stmt;
+  return Array.isArray(stmt) ? stmt[stmt.length - 1].liquid : stmt;
 }
 /**
  * Convert an expression to liquid code
  */
 export function getLiquidBlock(component: Component, expression: Expression): { variableName: string, liquid: string }[] {
+  if (!expression || !expression.length) return [{ variableName: 'EMPTY', liquid: "" }];
   const token = expression[0];
   const result = [] as { variableName: string, liquid: string }[]
   if (expression.length === 0) return []
@@ -342,8 +363,12 @@ export function getLiquidBlock(component: Component, expression: Expression): { 
     const stmt = EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);;
     if (Array.isArray(stmt)) {
       result.push(...stmt)
-      const last = result[result.length-1];
+      const last = result[result.length - 1];
       last.liquid = `assign ${last.variableName} = ${last.liquid}`
+      result.push({
+        liquid: '',
+        variableName: last.variableName,
+      })
     } else {
       result.push({
         variableName: stmt,
@@ -419,13 +444,14 @@ export function getLiquidStatement(component: Component, expression: Expression,
     throw new Error('A filter cannot be followed by a property or state')
   }
   // Start with the assign statement
-  return `assign ${variableName} = ${lastVariableName ? `${lastVariableName}.` : ''
+  const [prepend, filterStr] = getLiquidStatementFilters(component, filters);
+  return prepend + `assign ${variableName} = ${lastVariableName ? `${lastVariableName}.` : ''
     }${
     // Add all the properties
     getLiquidStatementProperties(component, properties)
     }${
     // Add all the filters
-    getLiquidStatementFilters(component, filters)
+    filterStr
     }`
 }
 
@@ -456,9 +482,10 @@ export function getLiquidStatementProperties(component: Component, properties: (
     .join('.')
 }
 
-export function getLiquidStatementFilters(component: Component, filters: Filter[]): string {
-  if (!filters.length) return ''
-  return ' | ' + filters.map(token => {
+export function getLiquidStatementFilters(component: Component, filters: Filter[]): [string, string] {
+  if (!filters.length) return ['', '']
+  let prepend = [];
+  const filterStr = ' | ' + filters.map(token => {
     const options = token.options ? Object.entries(token.options)
       // Order the filter's options by the order they appear in the filter's optionsKeys
       .map(([key, value]) => ({
@@ -473,10 +500,11 @@ export function getLiquidStatementFilters(component: Component, filters: Filter[
         return a.order - b.order
       })
       // Convert the options to liquid
-      .map(({ key, value }) => handleFilterOption(component, token, key, value as string)) : []
+      .map(({ key, value }) => handleFilterOption(component, token, key, value as string, prepend)) : []
     return `${token.filterName ?? token.id}${options.length ? `: ${options.join(', ')}` : ''}`
   })
     .join(' | ')
+  return [prepend.length ? '\n' + prepend.join('\n') + '\n' : '', filterStr];
 }
 
 /**
@@ -489,7 +517,7 @@ function quote(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`
 }
 
-function handleFilterOption(component: Component, filter: Filter, key: string, value: string): string {
+function handleFilterOption(component: Component, filter: Filter, key: string, value: string, prepend: string[]): string {
   try {
     const expression = toExpression(value)
     if (expression) {
@@ -498,7 +526,17 @@ function handleFilterOption(component: Component, filter: Filter, key: string, v
           token.type === 'property' &&
           EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId]
         ) {
-          return justGetLiquid(EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token));
+          const res = EXPRESSION_HANDLERS.inline?.[token?.dataSourceId!]?.[token?.fieldId](component, token);
+          if (Array.isArray(res)) {
+
+            const last = res.pop();
+            res.forEach(e => {
+              prepend.push(e.liquid);
+            });
+            prepend.push(`\nassign ${last.variableName} = ${last.liquid}`);
+            return last.variableName
+          }
+          return res;
         }
         switch (token.type) {
           case 'property': {
@@ -519,6 +557,7 @@ function handleFilterOption(component: Component, filter: Filter, key: string, v
       return filter.quotedOptions?.includes(key) ? quote(result) : result
     }
   } catch (e) {
+    console.error("Error generating filter option:", e);
     // Ignore
   }
   return filter.quotedOptions?.includes(key) ? quote(value) : value

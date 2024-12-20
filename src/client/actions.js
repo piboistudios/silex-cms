@@ -1,4 +1,14 @@
 export const ACTIONS_JS = {
+    drill: function drill(obj, ...path) {
+
+        path = path.filter(Boolean).flatMap(p => p.split('.'))
+        return path.reduce((result, part, index, array) => {
+            if (index === array.length - 1) {
+                return [result ?? {}, part]
+            }
+            return result?.[part];
+        }, obj)
+    },
     run_all: function run_all(...fns/* : Function[] */) {
         while (fns.length) {
             const fn = fns.shift();
@@ -36,158 +46,174 @@ export const ACTIONS_JS = {
     },
     toggle_state: function toggle_state({
         $data,
-        key
+        key,
+        prop
     }) {
-        $data[key] = !$data[key];
+        const [obj, property] = this.drill($data, key, prop);
+        obj[property] = !obj[property];
     },
     flag_state: function flag_state({
         $data,
-        key
+        key,
+        prop
     }) {
-        $data[key] = true;
+        const [obj, property] = this.drill($data, key, prop);
+        obj[property] = true;
     },
     unflag_state: function unflag_state({
         $data,
-        key
+        key,
+        prop
     }) {
-        $data[key] = false;
+        const [obj, property] = this.drill($data, key, prop);
+        obj[property] = false;
     },
     subtract_from_state: function subtract_from_state({
         $data,
         key,
+        prop,
         value
     }) {
+        const [obj, property] = this.drill($data, key, prop);
         if (value?.$FETCH instanceof Function) {
             return value.$FETCH()
                 .then(value => {
                     if (value === null || value === undefined) return;
-                    $data[key] -= value.filtered().valueOf();
+                    obj[property] -= value;
                 })
         } else if (value instanceof Promise) {
             return value.then(value => {
                 if (value === null || value === undefined) return;
-                $data[key] -= value.filtered().valueOf();
+                obj[property] -= value;
             })
         } else {
             if (value === null || value === undefined) return;
-            $data[key] -= value.filtered().valueOf();
+            obj[property] -= value;
         }
     },
     add_to_state: function add_to_state({
         $data,
         key,
+        prop,
         value
     }) {
+        const [obj, property] = this.drill($data, key, prop);
         if (value?.$FETCH instanceof Function) {
             return value.$FETCH()
                 .then(value => {
                     if (value === null || value === undefined) return;
-                    $data[key] += value.filtered().valueOf();
+                    obj[property] += value;
                 })
         } else if (value instanceof Promise) {
             return value.then(value => {
                 if (value === null || value === undefined) return;
-                $data[key] += value.filtered().valueOf();
+                obj[property] += value;
             })
         } else {
             if (value === null || value === undefined) return;
-            $data[key] += value.filtered().valueOf();
+            obj[property] += value;
         }
     },
     prepend_to_state: function prepend_to_state({
         $data,
         key,
+        prop,
         value
     }) {
+        const [obj, property] = this.drill($data, key, prop);
         if (value?.$FETCH instanceof Function) {
             return value.$FETCH()
                 .then(value => {
                     if (value === null || value === undefined) return;
-                    $data[key] = value.filtered().valueOf() + $data[key];
+                    obj[property] = value + obj[property];
                 })
         } else if (value instanceof Promise) {
             return value.then(value => {
                 if (value === null || value === undefined) return;
-                $data[key] = value.filtered().valueOf() + $data[key];
+                obj[property] = value + obj[property];
             })
         } else {
             if (value === null || value === undefined) return;
-            $data[key] = value.filtered().valueOf() + $data[key];
+            obj[property] = value + obj[property];
         }
     },
     multiply_state: function multiply_state({
         $data,
         key,
+        prop,
         value
     }) {
+        const [obj, property] = this.drill($data, key, prop);
         if (value?.$FETCH instanceof Function) {
             return value.$FETCH()
                 .then(value => {
                     if (value === null || value === undefined) return;
-                    $data[key] *= value.filtered().valueOf();
+                    obj[property] *= value;
                 })
         } else if (value instanceof Promise) {
             return value.then(value => {
                 if (value === null || value === undefined) return;
-                $data[key] *= value.filtered().valueOf();
+                obj[property] *= value;
             })
         } else {
             if (value === null || value === undefined) return;
-            $data[key] *= value.filtered().valueOf();
+            obj[property] *= value;
         }
     },
     divide_state: function divide_state({
         $data,
         key,
+        prop,
         value
     }) {
+        const [obj, property] = this.drill($data, key, prop);
         if (value?.$FETCH instanceof Function) {
             return value.$FETCH()
                 .then(value => {
                     if (value === null || value === undefined) return;
-                    $data[key] /= value.filtered().valueOf();
+                    obj[property] /= value;
                 })
         } else if (value instanceof Promise) {
             return value.then(value => {
                 if (value === null || value === undefined) return;
-                $data[key] /= value.filtered().valueOf();
+                obj[property] /= value;
             })
         } else {
             if (value === null || value === undefined) return;
-            $data[key] /= value.filtered().valueOf();
+            obj[property] /= value;
         }
     },
-    set_state: function set_state(opts) {
-        const { $data, key, value } = opts;
+    set_state: function set_state({ $data, key, prop, value }) {
+        const [obj, property] = this.drill($data, key, prop);
         if (value?.$FETCH instanceof Function) {
             return value.$FETCH()
                 .then(value => {
-                    $data[key] = value === null ? null : value === undefined ? undefined : value.filtered().valueOf();
+                    obj[property] = value === null ? null : value === undefined ? undefined : value;
                 })
         } else if (value instanceof Promise) {
             return value.then(value => {
-                $data[key] = value === null ? null : value === undefined ? undefined : value.filtered().valueOf();
+                obj[property] = value === null ? null : value === undefined ? undefined : value;
             })
         } else {
-            $data[key] = value === null ? null : value === undefined ? undefined : value.filtered().valueOf();
+            obj[property] = value === null ? null : value === undefined ? undefined : value;
         }
     },
-    coalesce_w_state: function set_state(opts) {
-        const { $data, key, value } = opts;
+    coalesce_w_state: function set_state({ $data, key, prop, value }) {
         if (!value) return;
+        const [obj, property] = this.drill($data, key, prop);
         if (value?.$FETCH instanceof Function) {
             return value.$FETCH()
                 .then(value => {
                     if (value === null || value === undefined) return;
-                    $data[key] = value.filtered().valueOf();
+                    obj[property] = value;
                 })
         } else if (value instanceof Promise) {
             return value.then(value => {
                 if (value === null || value === undefined) return;
-                $data[key] = value.filtered().valueOf();
+                obj[property] = value;
             })
         } else {
-            $data[key] = value.filtered().valueOf();
+            obj[property] = value;
         }
     }
 }
