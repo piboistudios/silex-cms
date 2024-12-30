@@ -19,7 +19,10 @@ Alpine.store('ensure_csrf', async ({ id, token }) => {
     if (_merged_tokens.has(id)) return;
     const res = await fetch('/auth/csrf/merge', {
         method: 'post',
-        body: JSON.stringify(token)
+        headers: {
+            "content-type": "application/json"
+        },
+        body: JSON.stringify({token})
     });
     _merged_tokens.add(id);
     _csrf = await res.text();

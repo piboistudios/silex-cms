@@ -21,6 +21,7 @@ export const ACTIONS_JS = {
         }
     },
     for_of: function for_of({ of, stmt }) {
+        if (!stmt) return;
         if (of instanceof Promise) {
             return of.then(of => for_of({ of, stmt }));
         }
@@ -37,11 +38,22 @@ export const ACTIONS_JS = {
         }
         return prev;
     },
+    scroll_to: function scroll_to({ target }) {
+        /**
+         * @type {HTMLElement}
+         */
+        const el = document.querySelector(target);
+        window.scrollTo(0, el.offsetTop);
+    },
+    open: function open({ url, target }) {
+        window.open(url, target || '_blank');
+    },
+    
     case: function _case({ test, consequent, alternate }) {
         if (test) {
-            return consequent();
+            return consequent?.();
         } else {
-            return alternate();
+            return alternate?.();
         }
     },
     toggle_state: function toggle_state({

@@ -115,10 +115,13 @@ function render(settings: Silex11tyPluginWebsiteSettings, config: ClientConfig, 
         The "Silex CMS" feature integrates <a target="_blank" href="https://www.11ty.dev/">11ty</a> static site generator and your favorite headless CMS with Silex.
         <br>Read the <a target="_blank" href="https://docs.silex.me/en/user/cms">documentation</a> to learn more.
       </div>
-      <select name="method">
+      <label>Meethod
+        <input type="text" name="method" value=${settings.method} />
+      </label>
+      <!-- <select name="method">
         <option value="get" .selected=${settings.method === 'get'}>GET</option>
         <option value="post" .selected=${settings.method === 'post'}>POST</option>
-      </select>
+      </select> -->
        <label class="silex-form__element">E-Mail Template?
           <input type="checkbox" name="email_template" ?checked=${!!settings.email_template}/>
         </label>

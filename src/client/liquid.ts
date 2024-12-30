@@ -37,6 +37,16 @@ function getLiquidBlockReified(component: Component, e: Expression) {
 const EXPRESSION_HANDLERS = {
   inline: {
     "core": {
+      ...Object.fromEntries(['string', 'date', 'bool', 'number'].map(v => [v, (component: Component, token: Property) => {
+        if (!token.options?.value) throw new Error("`value` is requird.");
+        const parsed = Object.fromEntries(parseEntries(token.options));
+        const value = getLiquidBlock(component, parsed.value);
+        const last = `${value[value.length - 1].variableName} | ${v}`
+        const variableName = getNextVariableName(component, numNextVar++);
+        return [...value, {
+          variableName, liquid: last
+        }]
+      }])),
       "ternary"(component: Component, token: Property) {
         if (!token.options?.consequent || !token.options?.testLeft) throw new Error("`testLeft` and `consequent` required for ternaries");
         const parsed = Object.fromEntries(parseEntries(token.options));
@@ -131,48 +141,48 @@ const EXPRESSION_HANDLERS = {
       }
     }
   },
-  isolated: {
-    "core": {
-      "unop"(component: Component, token: Property) {
-        const r = EXPRESSION_HANDLERS.inline.core.unop(component, token);
-        return justGetLiquid(r);
-      },
-      "binop"(component: Component, token: Property) {
-        const r = EXPRESSION_HANDLERS.inline.core.binop(component, token);
-        return justGetLiquid(r);
-      },
-      "ternary"(component: Component, token: Property) {
-        const r = EXPRESSION_HANDLERS.inline.core.ternary(component, token);
-        return justGetLiquid(r);
-      },
-      "json"(component: Component, token: Property) {
-        const r = EXPRESSION_HANDLERS.inline.core.json(component, token);
-        return justGetLiquid(r);
-      },
-    },
-    "http": {
+  // isolated: {
+  //   "core": {
+  //     "unop"(component: Component, token: Property) {
+  //       const r = EXPRESSION_HANDLERS.inline.core.unop(component, token);
+  //       return justGetLiquid(r);
+  //     },
+  //     "binop"(component: Component, token: Property) {
+  //       const r = EXPRESSION_HANDLERS.inline.core.binop(component, token);
+  //       return justGetLiquid(r);
+  //     },
+  //     "ternary"(component: Component, token: Property) {
+  //       const r = EXPRESSION_HANDLERS.inline.core.ternary(component, token);
+  //       return justGetLiquid(r);
+  //     },
+  //     "json"(component: Component, token: Property) {
+  //       const r = EXPRESSION_HANDLERS.inline.core.json(component, token);
+  //       return justGetLiquid(r);
+  //     },
+  //   },
+  //   "http": {
 
-      "get_session"(component: Component, token: Property) {
-        if (!token?.options?.key) throw new Error("`key` is required.");
-        return `session.${token.options.key}`
-      },
-      "get_body"(component: Component, token: Property) {
-        if (!token?.options?.key) throw new Error("`key` is required.");
-        return `body.${token.options.key}`
-      },
-      "get_query"(component: Component, token: Property) {
-        if (!token?.options?.key) throw new Error("`key` is required.");
-        return `query.${token.options.key}`
-      },
-      "get_cookie"(component: Component, token: Property) {
-        if (!token?.options?.key) throw new Error("`key` is required.");
-        return `cookies.${token.options.key}`
-      },
-      "get_local"(component: Component, token: Property) {
-        if (!token?.options?.key) throw new Error("`key` is required.");
-        return `locals.${token.options.key}`
-      }
-    },
+  //     "get_session"(component: Component, token: Property) {
+  //       if (!token?.options?.key) throw new Error("`key` is required.");
+  //       return `session.${token.options.key}`
+  //     },
+  //     "get_body"(component: Component, token: Property) {
+  //       if (!token?.options?.key) throw new Error("`key` is required.");
+  //       return `body.${token.options.key}`
+  //     },
+  //     "get_query"(component: Component, token: Property) {
+  //       if (!token?.options?.key) throw new Error("`key` is required.");
+  //       return `query.${token.options.key}`
+  //     },
+  //     "get_cookie"(component: Component, token: Property) {
+  //       if (!token?.options?.key) throw new Error("`key` is required.");
+  //       return `cookies.${token.options.key}`
+  //     },
+  //     "get_local"(component: Component, token: Property) {
+  //       if (!token?.options?.key) throw new Error("`key` is required.");
+  //       return `locals.${token.options.key}`
+  //     }
+  //   },
 
   }
 }

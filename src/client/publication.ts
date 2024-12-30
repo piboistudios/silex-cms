@@ -607,8 +607,9 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
   const dataTree = editor.DataSourceManager.getDataTree()
   const states = getStatesObj(config, component);
   const { statesObj, statesPrivate, statesPublic } = states;
-
-  const reactive = component.get(REACTIVE_ID); //componentIsReactive(component);
+  const editable = component.get('isEditable');
+  const cid = component.get('contentId');
+  const reactive = !editable && component.get(REACTIVE_ID); //componentIsReactive(component);
   let isWrapper = false;
   // console.log("Component:", component, "is reactive?", reactive);
   const unwrap = component.get(UNWRAP_ID)
@@ -636,7 +637,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
 
   }
 
-  if (isWrapper || statesPrivate.length > 0 || statesPublic.length > 0 || unwrap || reactive) {
+  if (editable || isWrapper || statesPrivate.length > 0 || statesPublic.length > 0 || unwrap || reactive) {
     const tagName = component.get('tagName')?.toLowerCase()
     if (tagName) {
       // Convenience key value object
@@ -714,6 +715,7 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
 
           alpineAttributes ??= '';
           alpineAttributes += ` x-bind="bind_${sanitizeId(getDataId(component))}" `;
+          if (!hasDataScript) alpineAttributes += ' x-data '
         }
         const xmodelAtt = statesPrivate.find(s => s.label === 'x-model');
         if (xmodelAtt) {
@@ -846,19 +848,48 @@ function renderComponent(config: ClientConfig, component: Component, toHtml: () 
       const mkReactiveHtml = reactiveForStart && reactiveForEnd;
       // component.setAttributes(originalAttributes);
       let html = '', reactiveHtml = '';;
-      if (unwrap) {
-        html = `${before}${innerHtml}${after}`
-        if ((component as any).$$remove) {
-          component.remove();
-        }
-        cache.set(componentId, html)
-      } else {
-        html = `${before}<${tagName}${attributes ? ` ${attributes}` : ''}${alpineAttributes ? alpineAttributes : ''}${mkReactiveHtml ? ' x-data x-rm' : ''}>${innerHtml}</${tagName}>${after}`
-        if (mkReactiveHtml) {
-          reactiveHtml = `${ifStart ?? ''}${reactiveForStart}<${tagName}${attributes ? ` ${attributes}` : ''}${alpineAttributes ? alpineAttributes : ''}>${innerHtml}</${tagName}>${reactiveForEnd}${ifEnd ?? ''}`
-        }
-        if ((component as any).$$remove) {
-          component.remove();
+      if (editable && cid) {
+        const cvar = `content_${toSafeVarName(cid)}`
+        const h = i => `${before}<${tagName}${attributes ? ` ${attributes}` : ''}>${i}</${tagName}>${after}`
+        const c = [
+          `     {% if ${cvar}.content %}`,
+          h(`{{ ${cvar}.content }}`),
+          `      {% else %}`,
+          h(`${innerHtml}`),
+          `      {% endif %}`,
+        ]
+        html = [
+          `{% assign ${cvar} = "${cid}" | load_content %}`,
+
+          `{% if req.editor %}`,
+          ` <div style="position:relative;">`,
+          `  <div style="width:100%;display:flex;justify-content:end">`,
+          `   <a href="{{ ${cvar}.url }}" target="_blank">Edit</a></div>`,
+          ...c,
+          `  </div>`,
+          `{% else %}`,
+          ...c,
+          `{% endif %}`,
+
+
+        ].join('\n')
+      }
+      else {
+
+        if (unwrap) {
+          html = `${before}${innerHtml}${after}`
+          if ((component as any).$$remove) {
+            component.remove();
+          }
+          cache.set(componentId, html)
+        } else {
+          html = `${before}<${tagName}${attributes ? ` ${attributes}` : ''}${alpineAttributes ? alpineAttributes : ''}${mkReactiveHtml ? ' x-data x-rm' : ''}>${innerHtml}</${tagName}>${after}`
+          if (mkReactiveHtml) {
+            reactiveHtml = `${ifStart ?? ''}${reactiveForStart}<${tagName}${attributes ? ` ${attributes}` : ''}${alpineAttributes ? alpineAttributes : ''}>${innerHtml}</${tagName}>${reactiveForEnd}${ifEnd ?? ''}`
+          }
+          if ((component as any).$$remove) {
+            component.remove();
+          }
         }
       }
       let ret;
@@ -1109,7 +1140,7 @@ function getAlpineDataScript(component: Component, config: ClientConfig): [strin
               type: "ExpressionStatement",
               expression: {
                 type: "AssignmentExpression",
-                left: identifier(["opts","$self"]),
+                left: identifier(["opts", "$self"]),
                 right: identifier("this"),
                 operator: "="
               }
@@ -1416,6 +1447,60 @@ const TEST_OPS: Record<string, (left: () => ESTree.Expression, right: () => ESTr
 const ACTIONS: Record<string, typeof STATE_SETTER> = Object.fromEntries(MUTATORS
   .map(m => [m, STATE_SETTER])
   .concat([
+    ['scroll_to', {
+      getArguments(_expr, opts) {
+        const target: any = _expr.options?.target;
+        return {
+          type: "ObjectExpression",
+          properties: [
+            {
+              type: "Property",
+              kind: "init",
+              method: false,
+              shorthand: false,
+              key: identifier("target"),
+              value: toJsExpression(target, opts),
+              computed: false,
+            }
+          ]
+        }
+
+      },
+    }
+
+    ],
+    ['open', {
+      getArguments(_expr, opts) {
+        const url: any = _expr.options?.url;
+        const target: any = _expr.options?.target;
+        return {
+          type: "ObjectExpression",
+          properties: [
+            {
+              type: "Property",
+              kind: "init",
+              method: false,
+              shorthand: false,
+              key: identifier("url"),
+              value: toJsExpression(url, opts),
+              computed: false,
+            },
+            {
+              type: "Property",
+              kind: "init",
+              method: false,
+              shorthand: false,
+              key: identifier("target"),
+              value: toJsExpression(target, opts),
+              computed: false,
+            }
+          ]
+        }
+
+      },
+    }
+
+    ],
     ['case', {
       getArguments(_expr, opts) {
         const testLeft: any = _expr.options?.testLeft;
@@ -1436,7 +1521,7 @@ const ACTIONS: Record<string, typeof STATE_SETTER> = Object.fromEntries(MUTATORS
                 type: "Identifier",
                 name: "test"
               },
-              value: TEST_OPS[testOp](() => awaited(toJsExpression(testLeft, opts)), () => awaited(toJsExpression(testRight, opts)))
+              value: TEST_OPS[testOp](() => (toJsExpression(testLeft, opts)), () => (toJsExpression(testRight, opts)))
             },
             {
               type: "Property",
@@ -1448,7 +1533,12 @@ const ACTIONS: Record<string, typeof STATE_SETTER> = Object.fromEntries(MUTATORS
                 type: "Identifier",
                 name: "consequent",
               },
-              value: toJsExpression(consequent, opts)
+              value: {
+                type: "ArrowFunctionExpression",
+                params: [],
+                body: toJsExpression(consequent, opts),
+                expression: true,
+              }
             },
             {
               type: "Property",
@@ -1460,7 +1550,12 @@ const ACTIONS: Record<string, typeof STATE_SETTER> = Object.fromEntries(MUTATORS
                 type: "Identifier",
                 name: "alternate",
               },
-              value: toJsExpression(alternate, opts)
+              value: {
+                type: "ArrowFunctionExpression",
+                params: [],
+                body: toJsExpression(alternate, opts),
+                expression: true
+              }
             }
           ]
         }
@@ -1532,11 +1627,13 @@ type ToJsExpressionOpts = {
   rawStates?: boolean;
   optionalMembers?: boolean;
   filtered?: boolean;
-  component: Component
+  component: Component;
+  serverSideEvtCallIdx?: number;
   event?: any
   states?: string[]
   liquidFilters?: string[]
   transformers?: {
+    authz?: (v: ESTree.Expression, path: string) => ESTree.Expression
     root?: (v: ESTree.Expression) => ESTree.Expression
     chain?: (v: ESTree.Expression) => ESTree.Expression,
     middleware?: (v: Token, c?: ESTree.Expression) => [ESTree.Expression, boolean],
@@ -1569,11 +1666,43 @@ function mkLiquidGetter(t: string) {
     opts: ToJsExpressionOpts): ESTree.Expression => {
     return {
       type: "Identifier",
-      name: `{{ ${t}.${expr.options!.key as any} | json }}`
+      name: `{{ ${t}.${expr.options!.key as any} | json | render_void }}`
     }
   }
 }
+function voidguard(v): ((expr: ESTree.Expression) => ESTree.Expression) {
+  return (expr) => ({
+    type: "ConditionalExpression",
 
+    test: {
+      type: "BinaryExpression",
+      operator: "===",
+      left: {
+        type: "LogicalExpression",
+        operator: "??",
+        left: expr,
+        right: {
+          type: "UnaryExpression",
+          operator: "!",
+          prefix: true,
+          argument: expr
+        }
+      },
+      right: expr
+    },
+    consequent: v,
+    alternate: expr
+  })
+}
+function fallback(v, expr) {
+  return {
+    type: "LogicalExpression",
+    operator: "||",
+    left: v,
+    right: expr
+
+  }
+}
 const EXPRESSION_MAPPERS: Record<string, Record<string, ReturnType<typeof mkLiquidGetter>>> = {
   '__action_loop': {
     'loop_var'(
@@ -1601,6 +1730,66 @@ const EXPRESSION_MAPPERS: Record<string, Record<string, ReturnType<typeof mkLiqu
     }
   },
   'core': {
+    'number'(
+      expr,
+      opts
+    ) {
+      if (!expr.options?.value) throw new Error("`value` is required.");
+      const value = expr.options.value as any;
+      const valueExpr = toJsExpression(value, opts);
+      return voidguard({
+        type: "CallExpression",
+        callee: identifier("Number"),
+        arguments: [valueExpr],
+        optional: false
+      })(valueExpr)
+    },
+    'string'(
+      expr,
+      opts
+    ) {
+      if (!expr.options?.value) throw new Error("`value` is required.");
+      let value = expr.options.value as any;
+
+      const valueExpr = value !== '[]' ? toJsExpression(value, opts) : {
+        type: "Literal",
+        value: ""
+      } as ESTree.Literal;
+      return voidguard({
+        type: "CallExpression",
+        callee: identifier("String"),
+        arguments: [valueExpr],
+        optional: false
+      })(valueExpr)
+    },
+    'bool'(
+      expr,
+      opts
+    ) {
+      if (!expr.options?.value) throw new Error("`value` is required.");
+      const value = expr.options.value as any;
+      const valueExpr = toJsExpression(value, opts);
+      return voidguard({
+        type: "CallExpression",
+        callee: identifier("Boolean"),
+        arguments: [valueExpr],
+        optional: false
+      })(valueExpr)
+    },
+    'date'(
+      expr,
+      opts
+    ) {
+      if (!expr.options?.value) throw new Error("`value` is required.");
+      const value = expr.options.value as any;
+      const valueExpr = toJsExpression(value, opts);
+      return voidguard({
+        type: "NewExpression",
+        callee: identifier("Date"),
+        arguments: [valueExpr],
+        optional: false
+      })(valueExpr)
+    },
     'json'(
       expr,
       opts) {
@@ -1703,12 +1892,16 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
   // console.log("Input expression:", expression);
   const first = expression[0];
   let lastChained;
-  let { root, chain: _chain, middleware, baseFieldId: baseFieldId } = opts?.transformers! || {};
+  let { authz, root, chain: _chain, middleware, baseFieldId: baseFieldId } = opts?.transformers! || {};
   root ??= v => v;
   _chain ??= VALUEOF_CHAINER;
   middleware ??= CHAIN_FILTERS(root, opts);
+  authz ??= v => v
   baseFieldId ??= t => t.fieldId
   if (first.type === 'property' && first.dataSourceId === 'actions') {
+    const actionsId = (cache.get('actionsId') ?? 0) + 1;
+    let hasFromServer;
+    cache.set('actionsId', actionsId);
     const ret = {
       type: "CallExpression",
       optional: false,
@@ -1816,11 +2009,39 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
             }
           }
           else if (ACTIONS[e.fieldId]) {
-            const firstFromServerCall = fromserver(e) && (!prev || !fromserver(prev)) && !opts.states;
+            const firstFromServerCall = fromserver(e) && (!prev || !fromserver(prev)) && (opts.states as any)?.actionsId !== actionsId;
             let states: string[];
             if (firstFromServerCall) {
+              hasFromServer = true;
               states = [];
+              (states as any).actionsId = actionsId;
               opts.states = states;
+              opts.transformers ??= {};
+              const oldAuthz = authz!;
+              authz = opts.transformers.authz = (v, path) => ({
+                type: "CallExpression",
+                optional: false,
+                callee: {
+                  type: "MemberExpression",
+                  optional: false,
+                  computed: false,
+
+                  object: {
+                    type: "CallExpression",
+                    optional: false,
+                    callee: root(identifier(["$store", "ensure_csrf"])),
+                    arguments: [identifier(`{{ "${path}" "${path}" | to_access  }}`)]
+                  },
+                  property: identifier("then"),
+                },
+                arguments: [{
+                  type: "ArrowFunctionExpression",
+                  params: [],
+                  body: oldAuthz(v, path),
+                  expression: true
+                }]
+              } as ESTree.CallExpression);
+              (authz as any).prev = oldAuthz;
             }
             const expr: ESTree.Expression = {
               type: "CallExpression",
@@ -1851,40 +2072,60 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
               ],
               optional: true
             };
+
+
             exprs.value.push(expr);
             if (firstFromServerCall) {
               const last = expr;
 
-              exprs.value[exprs.value.length - 1] = (() => ({
+              exprs.value[exprs.value.length - 1] = ((close) => ({
                 type: "Identifier",
                 name: `{% fromserver ${getDataId(opts.component)}-${Math.random() * Date.now()} ${states./* map(s => `"${s}"`). */join(' ')} %}` +
                   genJs({
                     type: "MemberExpression",
                     optional: false,
                     computed: false,
-                    object: root(identifier(['$store','actions'])),
+                    object: root(identifier(['$store', 'actions'])),
                     property: {
                       type: "Identifier",
                       name: "run_all"
                     }
                   }, { minify: false }) + "(() => " +
                   genJs(last, { minify: false }) +
-                  (idx === arr.length - 1 ? "){% endfromserver %}" : '')
+                  (close ? "){% endfromserver %}" : '')
               })) as any
             }
+            else if (opts.states) {
+              exprs.value[exprs.value.length - 1] = ((close) => !close ? ({
+                type: "Identifier",
+                name: genJs(expr, { minify: false }) /* + `{% "wtf? ${close} ${(opts.states as any).actionsId} ${actionsId}" %}` */
+              }) : ({
+                type: "Identifier",
+                name: genJs(expr, { minify: false }) + "){% endfromserver %}"
+              })) as any;
+            }
+
+
           } else if (opts?.event) {
             if (!prev || ACTIONS[prev.fieldId]) {
               const last: any = exprs.value[exprs.value.length - 1];
-              if (last && fromserver(last)) {
+              if (last && fromserver(prev)) {
                 delete opts.states;
+                authz = opts.transformers!.authz = (opts.transformers!.authz as any).prev
                 exprs.value[exprs.value.length - 1] = {
                   type: "Identifier",
-                  name: genJs(last instanceof Function ? last() : last, { minify: false }) + "){% endfromserver %}"
+                  name: genJs(last instanceof Function ? last(idx === arr.length - 1) : last, { minify: false })
                 }
               }
-              exprs.state.serverSideEvtCallIdx ??= 0;
+              opts.serverSideEvtCallIdx ??= 0;
               exprs.state.options = [];
-              exprs.value.push({
+              const path = [
+                opts?.component?.get?.('id-plugin-data-source'),
+                opts?.event?.name.replace(/[:]/gi, '_'),
+                opts.serverSideEvtCallIdx++
+              ].join('_');
+
+              exprs.value.push(authz!({
                 type: "CallExpression",
                 optional: false,
                 callee: {
@@ -1903,11 +2144,7 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
                 arguments: [
                   {
                     type: "Identifier",
-                    name: backticked(access("/" + [
-                      opts?.component?.get?.('id-plugin-data-source'),
-                      opts?.event?.name,
-                      exprs.state.serverSideEvtCallIdx++
-                    ].join('_')))
+                    name: backticked(access("/" + path))
                   },
                   {
                     type: "ObjectExpression",
@@ -1940,6 +2177,34 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
                         value: {
                           type: "Literal",
                           value: "same-origin"
+                        }
+                      },
+                      {
+                        type: "Property",
+                        method: false,
+                        kind: "init",
+                        shorthand: false,
+                        computed: false,
+                        key: identifier("headers"),
+                        value: {
+                          type: "ObjectExpression",
+                          properties: [
+                            {
+                              type: "Property",
+                              method: false,
+                              kind: "init",
+                              shorthand: false,
+                              computed: false,
+                              key: {
+                                type: "Literal",
+                                value: "content-type"
+                              },
+                              value: {
+                                type: "Literal",
+                                value: "application/json"
+                              }
+                            }
+                          ]
                         }
                       },
                       {
@@ -1979,7 +2244,7 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
                     ]
                   }
                 ]
-              })
+              }, path))
             }
             const options: ESTree.ObjectExpression["properties"] = exprs.state.options;
             const parsed = parseEntries(e?.options || {});
@@ -1990,12 +2255,25 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
               }
               if (!expression) return;
               for (const token of expression as Expression) {
-                if (token.type === 'property' && token.fieldId === 'json') {
-                  const obj = JSON.parse(token.options?.value as any);
-                  replaceObjectExpressions(obj, (v, { path }) => {
-                    if (typeof v === 'string') (v) = JSON.parse(v);
-                    return v && extractStates([path, v]);
-                  });
+                console.log("checking",token,"for states");
+                if (token.type === 'property') {
+                  opts.component && getFieldId(opts.component, token);
+                  if (token.fieldId === 'json') {
+                    return token.options?.value &&
+                      replaceObjectExpressions(JSON.parse(token.options!.value as any), (v, { path }) => {
+                        if (typeof v === 'string') (v) = JSON.parse(v);
+                        return v && extractStates([path, v]);
+                      });
+                  }
+                  Object.values(token.options || {}).forEach(v => {
+                    try {
+                      const obj = JSON.parse(v as any);
+                      if (Array.isArray(obj)) return extractStates(['', obj]);
+
+                    } catch (e) {
+
+                    }
+                  })
                 }
                 else if (token.type === 'state') {
                   const stateId = stateVarName(token);
@@ -2029,12 +2307,13 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
           }
           return exprs;
         }, { value: [] as ESTree.Expression[], state: {} }).value
-        .map((e): ESTree.ArrowFunctionExpression => ({
+        .map((e, idx, arr): ESTree.ArrowFunctionExpression => ({
           type: "ArrowFunctionExpression",
           expression: true,
-          body: e instanceof Function ? e() : e,
+          body: e instanceof Function ? e(hasFromServer && idx === arr.length - 1) : e,
           params: []
         }))
+
     }
     return ret as ESTree.Expression;
   }
@@ -2052,7 +2331,7 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
         if (expr.dataSourceId) {
           if (opts.states) {
             const states = getPropertyStates(expr);
-            console.log("Adding states...",...states);
+            console.log("Adding states...", ...states);
             opts.states.push(...states);
           }
           const mapper = EXPRESSION_MAPPERS?.[expr.dataSourceId]?.[expr.fieldId]
@@ -2069,7 +2348,7 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
 
               currentJs = {
                 type: "Identifier",
-                name: echoBlock1line(opts.component, liquidExpr).slice(0, -2) + `| json ${opts?.liquidFilters?.length ?
+                name: echoBlock1line(opts.component, liquidExpr).slice(0, -2) + `| json | render_void ${opts?.liquidFilters?.length ?
                   '| ' + opts.liquidFilters.join(' | ') + ' ' :
                   ''
                   }}}`
@@ -2320,7 +2599,7 @@ function getAlpineBindScript(
         .map(e => {
           // console.log("Event:", e);
           return ([
-            'x-on:' + [e.name, ...(e.modifiers ? e.modifiers.map(m => m.name) : [])].join('.'),
+            'x-on:' + [e.name, ...(e.modifiers ? e.modifiers.map(m => m.name || m.get('name')) : [])].join('.'),
             genJs(toJsExpression(JSON.parse(e.expression), withThis({ event: e, component, transformers: { baseFieldId: fieldId } })), { minify: false })
           ])
         })
@@ -2396,7 +2675,7 @@ function toJsVarName(arg0: string): string {
 function sanitizeId(arg0: string): string {
   return arg0.replace(/-/gi, '_');
 }
-function isLoopKey(component:Component, label:string) {
+function isLoopKey(component: Component, label: string) {
   return component.get('privateStates')?.find?.(s => s.id === '__data') && label === 'key';
 }
 function getBoundAttributes(component: Component, opts: Parameters<typeof getAlpineBindScript>["1"]) {
@@ -2412,7 +2691,7 @@ function getBoundAttributes(component: Component, opts: Parameters<typeof getAlp
               withThis({
                 component,
                 transformers: {
-                  middleware: CHAIN_FILTERS(undefined, { component }),
+                  middleware: CHAIN_FILTERS(undefined, withThis({ component })),
                   baseFieldId: t => getFieldId(component, t)
                 }
               })
@@ -2647,7 +2926,7 @@ function getAlpineStoreScript(component: Component, config: ClientConfig): strin
             optional: true
           } */{
             type: "Identifier",
-            name: `{{ ${dsPropRef} | call_with_opts: ${optVarName}${substitutionPairs ? ', ' + substitutionPairs : ''}  | json }}`
+            name: `{{ ${dsPropRef} | call_with_opts: ${optVarName}${substitutionPairs ? ', ' + substitutionPairs : ''}  | json | render_void }}`
           },
           {
             type: "ArrowFunctionExpression",
@@ -2913,6 +3192,12 @@ function getAllExpressions(component: Component): (Token & { index: number })[] 
 function isDataSource(dataSourceId?: import("@silexlabs/grapesjs-data-source").DataSourceId): unknown {
   return dataSourceId && String(dataSourceId).indexOf('ds-') === 0
 }
+const toSafeVarName = (str) => {
+  return str
+    .replace(/[^a-zA-Z0-9_]/g, '_') // Replace invalid chars with underscore
+    .replace(/^[0-9]/, '_$&')       // Prefix with underscore if starts with number
+    .replace(/^$/, '_');            // Use underscore for empty string
+};
 
 function getHttpMethod(dsRef: Property, config: ClientConfig): string {
   const doc = getOpenApiDoc(dsRef, config);
@@ -3164,7 +3449,7 @@ function backticked(v) {
 }
 function access(p) {
   if (p.charAt(0) === '/') p = p.slice(1);
-  return `{{ "${p}" | access}}`;
+  return `{{ "${p}" | access }}`;
 }
 
 function isExternalDataSource(dataSourceId: string) {
@@ -3211,12 +3496,14 @@ function fromserver(e: Property): boolean {
   let fromserver;
   parsed.forEach(function checkfromserver([k, v]: [string, any]) {
     if (fromserver) return;
+
     let expression;
     if (v && Array.isArray(v) && v.length && v[0] && v[0].type && v[0].label && ['property', 'filter', 'state'].includes(v[0].type)) {
       expression = v;
     }
     if (!expression) return;
     for (const token of expression as Expression) {
+      console.log("checking if", token, "is fromserver....");
       if (token.type === 'property') {
         if (token.fieldId === 'json') {
 
@@ -3227,15 +3514,29 @@ function fromserver(e: Property): boolean {
           });
         } else if (isDataSource(token.dataSourceId) || isHttp(token)) {
           fromserver = true;
+          console.log("Token is from server", token);
         }
+        Object.values(token.options || {}).forEach((v: any) => {
+          try {
+            const obj = JSON.parse(v);
+            if (Array.isArray(obj)) return checkfromserver(['', obj])
+            // replaceObjectExpressions(obj, (v, { path }) => {
+            //    if (typeof v === 'string') (v) = JSON.parse(v);
+            //    return v && walkExpr(v);
+            // });
+          } catch (e) {
+
+          }
+        })
       }
     }
+
   });
   return fromserver;
 }
 function getPropertyStates(e: Property): string[] {
   const parsed = parseEntries(e?.options || {});
-  const states:string[] = [];
+  const states: string[] = [];
   parsed.forEach(function checkfromserver([k, v]: [string, any]) {
     let expression;
     if (v && Array.isArray(v) && v.length && v[0] && v[0].type && v[0].label && ['property', 'filter', 'state'].includes(v[0].type)) {
@@ -3259,3 +3560,4 @@ function getPropertyStates(e: Property): string[] {
   });
   return states;
 }
+
