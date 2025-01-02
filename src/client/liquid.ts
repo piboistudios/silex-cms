@@ -115,6 +115,36 @@ const EXPRESSION_HANDLERS = {
       }
     },
     "http": {
+      "encrypt"(component, expr) {
+        const key: any = expr.options?.key;
+        const value: any = expr.options?.value;
+        const keylines = getLiquidBlock(component, JSON.parse(key));
+        const valuelines = getLiquidBlock(component, JSON.parse(value));
+        const last = `${valuelines[valuelines.length - 1].variableName} | encrypt: ${keylines[keylines.length - 1].variableName} | json`;
+        const variableName = getNextVariableName(component, numNextVar++);
+        return [...keylines, ...valuelines]
+          .concat([
+            {
+              liquid: last,
+              variableName,
+            }
+          ])
+      },
+      "decrypt"(component, expr) {
+        const key: any = expr.options?.key;
+        const value: any = expr.options?.value;
+        const keylines = getLiquidBlock(component, JSON.parse(key));
+        const valuelines = getLiquidBlock(component, JSON.parse(value));
+        const last = `${valuelines[valuelines.length - 1].variableName} | encrypt: ${keylines[keylines.length - 1].variableName} | json`;
+        const variableName = getNextVariableName(component, numNextVar++);
+        return [...keylines, ...valuelines]
+          .concat([
+            {
+              liquid: last,
+              variableName,
+            }
+          ])
+      },
       "get_session"(component: Component, token: Property) {
         if (!token?.options?.key) throw new Error("`key` is required.");
         return `session.${token.options.key}`
@@ -184,7 +214,7 @@ const EXPRESSION_HANDLERS = {
   //     }
   //   },
 
-  }
+}
 }
 /**
  * Generate liquid instructions which echo the value of an expression
@@ -214,7 +244,7 @@ export function echoBlock(component: Component, expression: Expression): string 
 /**
  * Generate liquid instructions which echo the value of an expression, on 1 line
  */
-export function echoBlock1line(component: Component, expression: Expression): string {
+export function echoBlock1line(component: Component, expression: Expression, substitutions?= true): string {
   if (expression.length === 0) throw new Error('Expression is empty')
   if (expression.length === 1 && expression[0].type === 'property' && expression[0].fieldId === FIXED_TOKEN_ID) {
     return expression[0].options?.value as string ?? ''
@@ -226,7 +256,7 @@ export function echoBlock1line(component: Component, expression: Expression): st
   // ) {
   //   return '{% ' + EXPRESSION_HANDLERS.isolated?.[firstTok.dataSourceId!]?.[firstTok.fieldId](component, firstTok) + ' %}';
   // }
-  const statements = getLiquidBlock(component, expression)
+  const statements = getLiquidBlock(component, expression, substitutions)
   return `{% ${statements
     .flatMap(({ liquid }) => liquid.split('\n'))
     .join(' %}{% ')
@@ -358,7 +388,7 @@ function justGetLiquid(stmt) {
 /**
  * Convert an expression to liquid code
  */
-export function getLiquidBlock(component: Component, expression: Expression): { variableName: string, liquid: string }[] {
+export function getLiquidBlock(component: Component, expression: Expression, substitutions?= true): { variableName: string, liquid: string }[] {
   if (!expression || !expression.length) return [{ variableName: 'EMPTY', liquid: "" }];
   const token = expression[0];
   const result = [] as { variableName: string, liquid: string }[]
@@ -400,7 +430,7 @@ export function getLiquidBlock(component: Component, expression: Expression): { 
     const optVarName = getOptId(component, firstToken);
     const dsPropRef = `${firstToken.dataSourceId}.${getFieldId(component, firstToken)}`;
     const tempName = snakecase(dsPropRef + '_' + numNextVar++);
-    const substitutionPairs: string = getSubstitutionOptions(component, firstToken);
+    const substitutionPairs: string = !substitutions ? '' : getSubstitutionOptions(component, firstToken);
 
     result.push({
       variableName: tempName,
@@ -612,7 +642,7 @@ function getWrapperComponent(component: Component): Component | undefined {
  * @param firstToken 
  */
 export function getSubstitutionOptions(component: Component, firstToken: StoredProperty): string {
-  if (true || !firstToken.options) return '';
+  if (!firstToken.options) return '';
   const opts = firstToken.options;
   const parsed = parseEntries(opts);
   const serverSideFields = parsed.filter(
@@ -633,7 +663,7 @@ export function getSubstitutionOptions(component: Component, firstToken: StoredP
     try {
       const expr = JSON.parse(v);
       if (isState(expr[0])) {
-        serverSideFields.push([[trunk, ...path].join('/'), expr])
+        serverSideFields.push([[trunk, ...path].join('.'), expr])
       }
     } catch (e) {
       console.error("Failed to parse JSON token:", v, path, e);

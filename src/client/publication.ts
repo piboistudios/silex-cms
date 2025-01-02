@@ -7,7 +7,7 @@ import { minify_sync } from 'terser'
 import { BinariOperator, DataSourceEditor, DataTree, Expression, Filter, IDataSourceModel, NOTIFICATION_GROUP, Options, Properties, Property, PropertyOptions, State, StateId, StoredFilter, StoredProperty, StoredState, StoredStateWithId, StoredToken, Token, UnariOperator, fromStored, getOrCreatePersistantId, getPersistantId, getState, getStateIds, getStateVariableName, toExpression } from '@silexlabs/grapesjs-data-source'
 import * as ESTree from 'estree';
 import * as AST from 'astring';
-import { assignBlock, echoBlock, echoBlock1line, getFieldId, getPaginationData, getSubstitutionOptions, ifBlock, loopBlock } from './liquid'
+import { assignBlock, echoBlock, echoBlock1line, getFieldId, getLiquidBlock, getPaginationData, getSubstitutionOptions, ifBlock, loopBlock } from './liquid'
 import { EleventyPluginOptions, Silex11tyPluginWebsiteSettings } from '../client'
 import { PublicationTransformer } from '@silexlabs/silex/src/ts/client/publication-transformers'
 import { ClientConfig } from '@silexlabs/silex/src/ts/client/config'
@@ -1624,6 +1624,7 @@ const FILTERS: Record<string, {
 
 }
 type ToJsExpressionOpts = {
+  // noSubstitutions: any;
   rawStates?: boolean;
   optionalMembers?: boolean;
   filtered?: boolean;
@@ -1868,6 +1869,24 @@ const EXPRESSION_MAPPERS: Record<string, Record<string, ReturnType<typeof mkLiqu
     'get_body': mkLiquidGetter('body'),
     'get_query': mkLiquidGetter('query'),
     'get_env': mkLiquidGetter('env'),
+    'encrypt'(expr, opts) {
+      const key: any = expr.options?.key;
+      const value: any = expr.options?.value;
+      const keylines = getLiquidBlock(opts.component, JSON.parse(key));
+      const valuelines = getLiquidBlock(opts.component, JSON.parse(value));
+      const last = `echo ${valuelines[valuelines.length - 1].variableName} | encrypt: ${keylines[keylines.length - 1].variableName} | json`;
+      return identifier([...keylines, ...valuelines].filter(l => l?.liquid?.trim?.()).map(l => `{% ${l.liquid} %}`)
+        .concat([`{% ${last} %}`]).join(''))
+    },
+    'decrypt'(expr, opts) {
+      const key: any = expr.options?.key;
+      const value: any = expr.options?.value;
+      const keylines = getLiquidBlock(opts.component, JSON.parse(key));
+      const valuelines = getLiquidBlock(opts.component, JSON.parse(value));
+      const last = `echo ${valuelines[valuelines.length - 1].variableName} | decrypt: ${keylines[keylines.length - 1].variableName} | json`;
+      return identifier([...keylines, ...valuelines].filter(l => l?.liquid?.trim?.()).map(l => `{% ${l.liquid} %}`)
+        .concat([`{% ${last} %}`]).join(''))
+    }
   }
 }
 function awaited(ast: ESTree.Expression): ESTree.AwaitExpression {
@@ -2255,7 +2274,7 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
               }
               if (!expression) return;
               for (const token of expression as Expression) {
-                console.log("checking",token,"for states");
+                console.log("checking", token, "for states");
                 if (token.type === 'property') {
                   opts.component && getFieldId(opts.component, token);
                   if (token.fieldId === 'json') {
@@ -2348,7 +2367,7 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
 
               currentJs = {
                 type: "Identifier",
-                name: echoBlock1line(opts.component, liquidExpr).slice(0, -2) + `| json | render_void ${opts?.liquidFilters?.length ?
+                name: echoBlock1line(opts.component, liquidExpr, !opts.states).slice(0, -2) + `| json | render_void ${opts?.liquidFilters?.length ?
                   '| ' + opts.liquidFilters.join(' | ') + ' ' :
                   ''
                   }}}`
@@ -3516,19 +3535,20 @@ function fromserver(e: Property): boolean {
           fromserver = true;
           console.log("Token is from server", token);
         }
-        Object.values(token.options || {}).forEach((v: any) => {
-          try {
-            const obj = JSON.parse(v);
-            if (Array.isArray(obj)) return checkfromserver(['', obj])
-            // replaceObjectExpressions(obj, (v, { path }) => {
-            //    if (typeof v === 'string') (v) = JSON.parse(v);
-            //    return v && walkExpr(v);
-            // });
-          } catch (e) {
-
-          }
-        })
       }
+
+      (token as any).options && Object.values((token as any).options || {}).forEach((v: any) => {
+        try {
+          const obj = JSON.parse(v);
+          if (Array.isArray(obj)) return checkfromserver(['', obj])
+          // replaceObjectExpressions(obj, (v, { path }) => {
+          //    if (typeof v === 'string') (v) = JSON.parse(v);
+          //    return v && walkExpr(v);
+          // });
+        } catch (e) {
+
+        }
+      })
     }
 
   });
