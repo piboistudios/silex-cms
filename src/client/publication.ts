@@ -1081,7 +1081,7 @@ function getAlpineDataScript(component: Component, config: ClientConfig): [strin
   // console.log("data script public states:", publicStates, component, component.tagName)
   const dataObj: ESTree.ObjectExpression = {
     type: "ObjectExpression",
-    properties: (publicStates).map((s): ESTree.Property => {
+    properties: (publicStates).flatMap((s): ESTree.Property[] => {
       const ret: ESTree.Property = {
         type: "Property",
         key: toLiteral(s.id),
@@ -1108,7 +1108,34 @@ function getAlpineDataScript(component: Component, config: ClientConfig): [strin
           }
         }
       }
-      return ret;
+      const dyns:any = s;
+      const set: ESTree.Property = dyns.hasSetting && dyns.setKey && {
+        type: "Property",
+        kind: "set",
+        key: toLiteral(dyns.id),
+        value: {
+          type: "FunctionExpression",
+          params: [identifier("v")],
+          body: {
+            type: "BlockStatement",
+            body: [
+              // Create the path of nested objects if they don't exist
+              ...createNullishPath(["this", "$data", dyns.setKey, ...(dyns.setProp || '').split('.')].filter(Boolean)),
+              // Return the final assignment
+              {
+                type: "ReturnStatement",
+                argument: {
+                  type: "AssignmentExpression",
+                  operator: "=",
+                  left: identifier(["this", "$data", dyns.setKey, ...(dyns.setProp || '').split('.')].filter(Boolean), { computed: true }),
+                  right: identifier("v")
+                }
+              }
+            ]
+          }
+        }
+      };
+      return [ret,set].filter(Boolean);
     })
   }
 
@@ -2028,7 +2055,7 @@ export function toJsExpression(expression: Expression | null | undefined, opts: 
             }
           }
           else if (ACTIONS[e.fieldId]) {
-            const firstFromServerCall = fromserver(e) && (!prev || !fromserver(prev)) && (opts.states as any)?.actionsId !== actionsId;
+            const firstFromServerCall = fromserver(e) && (!prev || (!fromserver(prev) && (opts.states as any)?.actionsId !== actionsId));
             let states: string[];
             if (firstFromServerCall) {
               hasFromServer = true;
@@ -3390,7 +3417,7 @@ function getReactiveProps(component: Component): ESTree.ObjectExpression["proper
         }
       }
     };
-    const setter: ESTree.Property | false = expr[0].type === 'state' &&
+    const setter: ESTree.Property | false = expr?.[0]?.type === 'state' &&
       ((p as any).modelable || p?.get?.('modelable')) &&
     {
       type: "Property",
@@ -3581,3 +3608,25 @@ function getPropertyStates(e: Property): string[] {
   return states;
 }
 
+
+function createNullishPath(path: string[]): ESTree.Statement[] {
+  return path.slice(0, -1).reduce((statements: ESTree.Statement[], _, idx) => {
+    const currentPath = path.slice(0, idx + 1);
+    const nextPath = path.slice(0, idx + 2);
+    
+    statements.push({
+      type: "ExpressionStatement",
+      expression: {
+        type: "AssignmentExpression",
+        operator: "??=",
+        left: identifier(nextPath, { computed: true }),
+        right: {
+          type: "ObjectExpression",
+          properties: []
+        }
+      }
+    });
+    
+    return statements;
+  }, []);
+}
